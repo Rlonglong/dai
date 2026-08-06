@@ -86,8 +86,10 @@ changed_files() {
 
     # --diff-filter=ACMR：只要新增/複製/修改/改名的檔案，刪掉的不用檢查
     # 三個點：以共同祖先為基準，不會把 target 分支上別人的改動算進來
-    git diff --name-only --diff-filter=ACMR "${base}...HEAD" 2>/dev/null \
-        || git diff --name-only --diff-filter=ACMR "${base}" HEAD
+    # core.quotePath=false：本專案的文件路徑是中文，預設 git 會輸出成
+    #   "docs/\347\266\255..." 這種跳脫字串，後續的副檔名比對會全部對不上
+    git -c core.quotePath=false diff --name-only --diff-filter=ACMR "${base}...HEAD" 2>/dev/null \
+        || git -c core.quotePath=false diff --name-only --diff-filter=ACMR "${base}" HEAD
 }
 
 # 從檔案清單裡挑出某個副檔名，並濾掉 AppleDouble（._foo.py）與不存在的檔案

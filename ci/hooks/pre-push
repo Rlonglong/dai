@@ -86,13 +86,14 @@ fi
 # -----------------------------------------------------------------------------
 # 算出這批 push 動到哪些檔案
 # -----------------------------------------------------------------------------
+# core.quotePath=false：路徑有中文時，預設 git 會輸出跳脫字串，副檔名比對會失效
 CHANGED="$(
     for r in "${ranges[@]}"; do
         if [[ "$r" == *"--not --remotes"* ]]; then
             base="$(git merge-base "${r%% *}" origin/"${DAI_DEFAULT_BRANCH:-main}" 2>/dev/null || echo "")"
-            [[ -n "$base" ]] && git diff --name-only --diff-filter=ACMR "${base}" "${r%% *}"
+            [[ -n "$base" ]] && git -c core.quotePath=false diff --name-only --diff-filter=ACMR "${base}" "${r%% *}"
         else
-            git diff --name-only --diff-filter=ACMR "${r%%..*}" "${r##*..}"
+            git -c core.quotePath=false diff --name-only --diff-filter=ACMR "${r%%..*}" "${r##*..}"
         fi
     done | sort -u | grep -v '^\._' | grep -v '/\._' || true
 )"
@@ -150,15 +151,26 @@ echo "==========================================================================
 if ((${#PY_FILES[@]} == 0)); then
     echo "這次沒有動到 .py，略過。"
 else
-    command -v flake8 >/dev/null 2>&1 \
-        && run_check "Python 語法與品質 (flake8)" flake8 "${PY_FILES[@]}" \
-        || echo "⚠️  找不到 flake8，略過。"
-    command -v bandit >/dev/null 2>&1 \
-        && run_check "Python 資安掃描 (bandit)" bandit -q -c bandit.yaml -ll "${PY_FILES[@]}" \
-        || echo "⚠️  找不到 bandit，略過。"
-    command -v black >/dev/null 2>&1 \
-        && run_check "Python 排版 (black)" black --check "${PY_FILES[@]}" \
-        || echo "⚠️  找不到 black，略過。"
+    # 注意：這裡不能寫成 `command -v X && run_check ... || echo "找不到 X"`
+    # 那個寫法在「工具有裝但檢查失敗」時也會跑到 || 分支，
+    # 印出誤導人的「找不到 X」。用 if/else 才分得清「沒裝」和「沒過」。
+    if command -v flake8 >/dev/null 2>&1; then
+        run_check "Python 語法與品質 (flake8)" flake8 "${PY_FILES[@]}"
+    else
+        echo "⚠️  找不到 flake8，略過（CI 上會再跑一次）。"
+    fi
+
+    if command -v bandit >/dev/null 2>&1; then
+        run_check "Python 資安掃描 (bandit)" bandit -q -c bandit.yaml -ll "${PY_FILES[@]}"
+    else
+        echo "⚠️  找不到 bandit，略過（CI 上會再跑一次）。"
+    fi
+
+    if command -v black >/dev/null 2>&1; then
+        run_check "Python 排版 (black)" black --check "${PY_FILES[@]}"
+    else
+        echo "⚠️  找不到 black，略過（CI 上會再跑一次）。"
+    fi
 fi
 
 echo ""
@@ -168,7 +180,7 @@ echo "==========================================================================
 if ((${#SQL_FILES[@]} == 0)); then
     echo "這次沒有動到 .sql，略過。"
 elif ! command -v sqlfluff >/dev/null 2>&1; then
-    echo "⚠️  找不到 sqlfluff，略過。"
+    echo "⚠️  找不到 sqlfluff，略過（CI 上會再跑一次）。"
 else
     run_check "SQL 語法規範 (sqlfluff)" sqlfluff lint --processes 1 "${SQL_FILES[@]}"
 fi

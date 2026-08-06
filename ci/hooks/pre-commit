@@ -38,7 +38,8 @@ if [[ "${DAI_SKIP_QUALITY:-0}" == "1" ]]; then
 fi
 
 # 濾掉 AppleDouble（._foo.py）
-mapfile -t STAGED < <(git diff --cached --name-only --diff-filter=ACMR \
+# core.quotePath=false：路徑有中文時，預設 git 會輸出跳脫字串，副檔名比對會失效
+mapfile -t STAGED < <(git -c core.quotePath=false diff --cached --name-only --diff-filter=ACMR \
     | grep -v '^\._' | grep -v '/\._' || true)
 
 mapfile -t PY_FILES  < <(printf '%s\n' "${STAGED[@]:-}" | grep '\.py$'  | while read -r f; do [[ -f "$f" ]] && echo "$f"; done)
@@ -67,12 +68,26 @@ echo "==========================================================================
 if ((${#PY_FILES[@]} == 0)) && ((${#SQL_FILES[@]} == 0)); then
     echo "沒有需要檢查的 .py / .sql 檔案。"
 else
+    # 用 if/else 而不是 `command -v X && run_check ...`：
+    # 後者在工具沒裝時會靜默跳過，看起來跟「檢查通過」一模一樣。
     if ((${#PY_FILES[@]} > 0)); then
-        command -v flake8 >/dev/null 2>&1 && run_check "Python 語法與品質 (flake8)" flake8 "${PY_FILES[@]}"
-        command -v bandit >/dev/null 2>&1 && run_check "Python 資安掃描 (bandit)" bandit -q -c bandit.yaml -ll "${PY_FILES[@]}"
+        if command -v flake8 >/dev/null 2>&1; then
+            run_check "Python 語法與品質 (flake8)" flake8 "${PY_FILES[@]}"
+        else
+            echo "⚠️  找不到 flake8，略過（CI 上會再跑一次）。"
+        fi
+        if command -v bandit >/dev/null 2>&1; then
+            run_check "Python 資安掃描 (bandit)" bandit -q -c bandit.yaml -ll "${PY_FILES[@]}"
+        else
+            echo "⚠️  找不到 bandit，略過（CI 上會再跑一次）。"
+        fi
     fi
     if ((${#SQL_FILES[@]} > 0)); then
-        command -v sqlfluff >/dev/null 2>&1 && run_check "SQL 語法規範 (sqlfluff)" sqlfluff lint --processes 1 "${SQL_FILES[@]}"
+        if command -v sqlfluff >/dev/null 2>&1; then
+            run_check "SQL 語法規範 (sqlfluff)" sqlfluff lint --processes 1 "${SQL_FILES[@]}"
+        else
+            echo "⚠️  找不到 sqlfluff，略過（CI 上會再跑一次）。"
+        fi
     fi
 fi
 
