@@ -1,0 +1,192 @@
+#!/usr/bin/env bash
+# =============================================================================
+# pre-push hook —— 「掃完才能 push」的第一道關卡
+# =============================================================================
+# 安裝：ci/install_hooks.sh
+#
+# 為什麼要有這個？
+#   CI 的 secret-scanning job 是在**東西已經上到 GitLab 之後**才跑的。
+#   等 pipeline 紅燈的時候，金鑰早就躺在遠端 repo 的物件庫裡了，
+#   這時候刪檔案沒有用，得整段歷史重寫 + 換金鑰。
+#   所以真正有效的順序是：
+#
+#       [1] pre-commit   本機，擋 staged 內容            ← 最早發現
+#       [2] pre-push     本機，擋整批要推出去的 commit    ← 你在這裡
+#       [3] pre-receive  VM3 伺服器端，擋 push 本身       ← --no-verify 繞不過
+#       [4] CI pipeline  最後防線 + 稽核紀錄
+#
+#   [2] 可以被 --no-verify 繞過，所以 [3] 一定要裝，兩者跑的是同一支
+#   ci/check_secrets.sh、同一份 .gitleaks.toml，判讀結果保證一致。
+#
+# 環境變數：
+#   DAI_SKIP_QUALITY=1   跳過品質檢查（flake8/bandit/sqlfluff/black）
+#                        ★ 資安檢查（gitleaks）永遠不會被跳過 ★
+# =============================================================================
+
+set -uo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+CI_DIR="${REPO_ROOT}/ci"
+Z40="0000000000000000000000000000000000000000"
+
+# 虛擬環境（如果有的話）
+for venv in "${DAI_VENV:-}" "${REPO_ROOT}/.venv" "${HOME}/.venv"; do
+    [[ -n "$venv" && -f "${venv}/bin/activate" ]] && { source "${venv}/bin/activate"; break; }
+done
+
+cd "$REPO_ROOT" || exit 1
+
+fail=0
+note_fail() { fail=1; }
+
+# -----------------------------------------------------------------------------
+# 讀 stdin：git 會餵進來每一組 <local_ref> <local_oid> <remote_ref> <remote_oid>
+# -----------------------------------------------------------------------------
+push_heads=()
+ranges=()
+while read -r local_ref local_oid remote_ref remote_oid; do
+    [[ -z "${local_ref:-}" ]] && continue
+    # 刪除遠端分支（local_oid 全 0）沒有內容要檢查
+    [[ "$local_oid" == "$Z40" ]] && continue
+    push_heads+=("$local_oid")
+    if [[ "$remote_oid" == "$Z40" ]]; then
+        # 新分支：拿「不在任何 remote 分支上的 commit」當範圍
+        ranges+=("${local_oid} --not --remotes=origin")
+    else
+        ranges+=("${remote_oid}..${local_oid}")
+    fi
+done
+
+if ((${#push_heads[@]} == 0)); then
+    echo "沒有要推送的內容，略過檢查。"
+    exit 0
+fi
+
+echo ""
+echo "================================================================================"
+echo " [1/4] 機密資訊防護 (Secret Scanning: gitleaks)  ★ 不可跳過 ★"
+echo "================================================================================"
+for r in "${ranges[@]}"; do
+    # shellcheck disable=SC2086
+    if [[ "$r" == *"--not --remotes"* ]]; then
+        "${CI_DIR}/check_secrets.sh" unpushed "${r%% *}" || note_fail
+    else
+        "${CI_DIR}/check_secrets.sh" range "${r%%..*}" "${r##*..}" || note_fail
+    fi
+done
+# 工作目錄現況也掃一次：抓「還沒 commit 但已經寫在檔案裡」的金鑰
+"${CI_DIR}/check_secrets.sh" tree || note_fail
+
+if [[ $fail -ne 0 ]]; then
+    echo ""
+    echo "❌ 偵測到機密資訊，push 已中止。修掉之後再推。"
+    exit 1
+fi
+
+# -----------------------------------------------------------------------------
+# 算出這批 push 動到哪些檔案
+# -----------------------------------------------------------------------------
+CHANGED="$(
+    for r in "${ranges[@]}"; do
+        if [[ "$r" == *"--not --remotes"* ]]; then
+            base="$(git merge-base "${r%% *}" origin/"${DAI_DEFAULT_BRANCH:-main}" 2>/dev/null || echo "")"
+            [[ -n "$base" ]] && git diff --name-only --diff-filter=ACMR "${base}" "${r%% *}"
+        else
+            git diff --name-only --diff-filter=ACMR "${r%%..*}" "${r##*..}"
+        fi
+    done | sort -u | grep -v '^\._' | grep -v '/\._' || true
+)"
+
+if [[ "${DAI_SKIP_QUALITY:-0}" == "1" ]]; then
+    echo ""
+    echo "⚠️  DAI_SKIP_QUALITY=1：略過品質檢查（資安檢查已完成）。"
+    echo "    CI 上還是會再跑一次，MR 一樣會被擋。"
+    exit 0
+fi
+
+mapfile -t PY_FILES < <(printf '%s\n' "$CHANGED" | grep '\.py$'  | while read -r f; do [[ -f "$f" ]] && echo "$f"; done)
+mapfile -t SQL_FILES < <(printf '%s\n' "$CHANGED" | grep '\.sql$' | while read -r f; do [[ -f "$f" ]] && echo "$f"; done)
+
+run_check() {
+    local label="$1"; shift
+    echo "--------------------------------------------------------"
+    echo "  > 檢查: $label"
+    echo "--------------------------------------------------------"
+    local output status=0
+    output="$("$@" 2>&1)" || status=$?
+    if [[ $status -ne 0 ]]; then
+        echo "❌ ${label} 失敗。"
+        echo ""
+        printf '%s\n' "$output" | sed 's/^/| /'
+        echo ""
+        note_fail
+        return 1
+    fi
+    [[ -n "$output" ]] && printf '%s\n' "$output"
+    echo "✅ ${label} 通過。"
+    echo ""
+}
+
+echo ""
+echo "================================================================================"
+echo " [2/4] 軟體組成分析 (SCA: pip-audit)"
+echo "================================================================================"
+if ! printf '%s\n' "$CHANGED" | grep -q 'requirements.*\.txt$'; then
+    echo "⚠️  跳過 SCA：這次沒有動到 requirements。"
+elif ! command -v pip-audit >/dev/null 2>&1; then
+    echo "⚠️  找不到 pip-audit，跳過（CI 上的 sca-dtrack job 會再掃一次）。"
+else
+    export PYTHONWARNINGS="ignore"
+    while read -r req; do
+        [[ -f "$req" ]] || continue
+        run_check "SCA (pip-audit: ${req})" pip-audit -r "$req"
+    done < <(printf '%s\n' "$CHANGED" | grep 'requirements.*\.txt$')
+fi
+
+echo ""
+echo "================================================================================"
+echo " [3/4] Python 靜態檢查 (flake8 / bandit / black)"
+echo "================================================================================"
+if ((${#PY_FILES[@]} == 0)); then
+    echo "這次沒有動到 .py，略過。"
+else
+    command -v flake8 >/dev/null 2>&1 \
+        && run_check "Python 語法與品質 (flake8)" flake8 "${PY_FILES[@]}" \
+        || echo "⚠️  找不到 flake8，略過。"
+    command -v bandit >/dev/null 2>&1 \
+        && run_check "Python 資安掃描 (bandit)" bandit -q -c bandit.yaml -ll "${PY_FILES[@]}" \
+        || echo "⚠️  找不到 bandit，略過。"
+    command -v black >/dev/null 2>&1 \
+        && run_check "Python 排版 (black)" black --check "${PY_FILES[@]}" \
+        || echo "⚠️  找不到 black，略過。"
+fi
+
+echo ""
+echo "================================================================================"
+echo " [4/4] SQL 檢查 (sqlfluff)"
+echo "================================================================================"
+if ((${#SQL_FILES[@]} == 0)); then
+    echo "這次沒有動到 .sql，略過。"
+elif ! command -v sqlfluff >/dev/null 2>&1; then
+    echo "⚠️  找不到 sqlfluff，略過。"
+else
+    run_check "SQL 語法規範 (sqlfluff)" sqlfluff lint --processes 1 "${SQL_FILES[@]}"
+fi
+
+echo ""
+if [[ $fail -ne 0 ]]; then
+    cat <<'EOF'
+================================================================================
+❌ 檢查未通過，push 已中止。
+================================================================================
+  修完再推一次就好。如果確定是誤判、而且趕時間：
+      DAI_SKIP_QUALITY=1 git push      ← 只跳過品質檢查，資安檢查照跑
+  但 CI 上會再跑一次同樣的檢查，MR 仍然會被擋，最後還是要修。
+EOF
+    exit 1
+fi
+
+echo "================================================================================"
+echo "✅ 語法與資安檢查全數通過，開始 push。"
+echo "================================================================================"
+exit 0

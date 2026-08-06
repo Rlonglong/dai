@@ -249,16 +249,26 @@ Dagster 是讀 `target/manifest.json` 來產生 dbt 資產的——**manifest �
 所以正常流程就是:
 
 ```
-git add models/NEW_MODEL.sql
+git checkout -b feat/new-model
+git add dagster_workspace/dbt_project/models/NEW_MODEL.sql
 git commit -m "新增 NEW_MODEL 模型"
-git push
+git push -u origin feat/new-model
+      ↓  ← 本地 pre-push hook 會先跑 gitleaks / flake8 / sqlfluff，沒過就推不上去
+在 GitLab 開 MR（target: main）
       ↓
-GitLab CI/CD 同步程式碼到 VM4 + 重新產生 manifest
+CI pipeline 綠燈 + 至少一位同事 code review 通過
+      ↓
+合併進 main
+      ↓
+CD 用 rsync 同步程式碼到 VM4 + 重新產生 manifest
       ↓
 到 Dagster UI 做 Reload（Step 4）
 ```
 
-**push 之後請確認 pipeline 有跑成功再往下走。** 如果 pipeline 紅了,manifest 就沒更新,後面 Reload 也不會看到新模型。
+**合併之後請確認 CD pipeline 有跑成功再往下走。** 如果 pipeline 紅了,manifest 就沒更新,後面 Reload 也不會看到新模型。
+
+> 分支怎麼開、MR 怎麼寫、review 要看什麼,見
+> [GitLab維運手冊 · 01_開發人員_日常開發流程](../../GitLab維運手冊/日常維運/01_開發人員_日常開發流程.md)。
 
 > 需要手動產生 manifest 的情況(一般不會走到)請看本篇最後的
 > [附註 · 手動產生 manifest 與編譯 SQL](#附註--手動產生-manifest-與編譯-sql)。
@@ -404,7 +414,7 @@ TimeWindowPartitionMapping(
 4. （通常還會）在 SQL_TO_CSV_MAPPING 加兩個匯出：
       XXX_EXPORT           depends_on_dbt_model: "XXX"
       XXX_earlyjob_EXPORT  depends_on_dbt_model: "XXX_earlyjob"
-5. push → CI/CD → Reload definitions
+5. push → MR → review → 合併 main → CD → Reload definitions
 ```
 
 ### 驗證有沒有生效
@@ -441,7 +451,9 @@ Reload 之後到 **Catalog → 下游模型 → Lineage 分頁 → Upstream**,
 [ ] 輸出有 TABLE_DATE 欄位
 [ ] 代碼清單走 get_config()，沒有自己複製貼上一長串 FUNC_CODE
 [ ] 用到的來源表都在 sources.yml 登記了
-[ ] push 到 GitLab，CI/CD pipeline 綠燈（manifest 已更新）
+[ ] push 到 GitLab（本地 pre-push 檢查通過），MR 開好
+[ ] CI pipeline 綠燈、code review 通過、已合併 main
+[ ] CD pipeline 綠燈（程式碼已同步到 VM4、manifest 已更新）
 [ ] Reload definitions 成功
 [ ] Lineage 分頁確認上游有接對
 [ ] 看過 target/compiled 的 SQL，變數都正確帶入
@@ -460,7 +472,9 @@ Reload 之後到 **Catalog → 下游模型 → Lineage 分頁 → Upstream**,
 以下情況才需要手動下指令:
 
 - CI/CD pipeline 掛了,但你急著先讓 Dagster 看到新模型
-- 你在 VM4 上直接改了檔案沒有走 git(**不建議,下次同步會被蓋掉**)
+- 你在 VM4 上直接改了檔案沒有走 git(**不建議**;下次 rsync 會被蓋掉,而且每日 hash
+  對帳會在隔天把這台機器標成不一致並告警,見
+  [GitLab維運手冊 · 12_同步完整性稽核](../../GitLab維運手冊/進階調整/12_同步完整性稽核.md))
 - 想在 push 之前先看編譯後的 SQL 長什麼樣
 
 ### 只更新 manifest

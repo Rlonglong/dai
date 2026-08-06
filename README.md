@@ -15,8 +15,8 @@ title: 部署手冊
 | VM | 角色 | 正式部署時更新 |
 |----|------|--------------|
 | VM1 | BCP Pipeline（SQL Server 資料搬移）| 更新 `env/vm1.env` |
-| VM3 | GitLab + Container Registry + Dependency-Track + Nginx | 更新 `env/vm3.env` |
-| VM4 | infra-db (PostgreSQL) + Dagster + GitLab Runner CD | 更新 `env/vm4.env` |
+| VM3 | GitLab + Container Registry + Dependency-Track + Nginx + **GitLab Runner CI/CD** | 更新 `env/vm3.env` |
+| VM4 | infra-db (PostgreSQL) + Dagster | 更新 `env/vm4.env` |
 | VM5 | Keycloak（含 LDAP 聯邦）+ Nginx + Superset | 更新 `env/vm5.env` |
 
 ---
@@ -33,12 +33,25 @@ title: 部署手冊
 [Phase 3] VM3：啟動 GitLab + dtrack + Container Registry
           └─ 3A: GitLab 初始化 CA 憑證 + OIDC 設定
           └─ 3B: dtrack admin 密碼 + OIDC 設定
-          └─ 3C: 註冊 GitLab Runner CI
+          └─ 3C: 註冊 GitLab Runner CI / CD
           └─ 3D: 驗證 Container Registry（與 GitLab 共用 domain，port 5050）
-[Phase 4] VM4：註冊 GitLab Runner CD
+[Phase 4] 版控與 CI/CD 同步（★本次新增，跨 VM1 / VM3 / VM4★）
+          └─ 4A: 三台 VM 建立 gitlab_runner 帳號與免密碼 SSH
+          └─ 4B: 安裝 post-deploy 腳本與 sudoers
+          └─ 4C: 建立兩個 GitLab repo 並推上初始程式碼
+          └─ 4D: 安裝伺服器端 pre-receive hook（★機密外洩的真正防線★）
+          └─ 4E: 設定分支保護、CI/CD Variables、環境隔離
+          └─ 4F: 設定每日雜湊對帳排程
+          └─ 4G: 首次部署（先 dry-run）
 [Phase 5] VM1：啟動 BCP Pipeline
 [Phase 6] 所有 VM：部署 rsyslog 日誌集中轉發
 ```
+
+> 📘 **日後維運看這裡**：本文件是**一次性的建置流程**。
+> 建好之後的日常操作（怎麼改東西、怎麼上線、每天要看什麼）在
+> [`docs/`](./docs/README.md)：
+> - [Dagster 維運手冊](./docs/Dagster維運手冊/README.md) — 資料流程怎麼運作、怎麼改
+> - [GitLab 維運手冊](./docs/GitLab維運手冊/README.md) — 怎麼把改動安全送上正式機
 
 ## 提供檔案
 ```
@@ -201,14 +214,14 @@ watch -n 2 "docker compose -f docker-compose_vm4_secure.yml --env-file ../env/vm
 
 # 步驟 3：啟動其餘 VM4 服務
 docker compose -f docker-compose_vm4_secure.yml --env-file ../env/vm4.env \
-  up -d dagster-login dagster-code dagster-webserver dagster-daemon gitlab-runner-cd
+  up -d dagster-login dagster-code dagster-webserver dagster-daemon
 ```
 
 **注意事項：**
 - `infra-db` 首次啟動時執行 `workspace/init-infra-db.sql`，會建立所有資料庫（keycloak、dtrack、superset、dagster、keycloak_access_db）。確保此 SQL 檔在啟動前已存在於正確路徑。
 - `dagster-code` 必須先 healthy，`dagster-webserver` 和 `dagster-daemon` 才能啟動（compose 已設定 `depends_on` 健康依賴）。
 - `dagster-login`（OAuth2 Proxy，Dagster SSO 對外邊界）會持續重試連線 Keycloak，直到 Phase 2 的 Keycloak 啟動後才會轉為正常狀態，屬預期行為，不需要特別處理。
-- `gitlab-runner-cd` 此時容器啟動但尚未註冊，等 GitLab 在 Phase 3 啟動後再於 Phase 4 完成註冊。
+- CD runner 已改到 VM3（跟 CI runner 同一台，見 Phase 3-5），VM4 不再需要 `gitlab-runner-cd`。改用 rsync 從 VM3 推送，VM4 只當接收端，上面不會有 `.git` 目錄、也不需要對 GitLab 的連線。理由見 [11_CD_rsync部署機制 · 第 8 節](./docs/GitLab維運手冊/進階調整/11_CD_rsync部署機制.md#8-為什麼是vm3-推而不是vm4-拉)。
 - PostgreSQL 對外 Port 是 `5433`（非預設 5432），參數來自 `INFRA_DB_PORT=5433`。
 - 務必先完成 Phase 0-6 的目錄權限設定，否則 `dagster-code` / `dagster-webserver` / `dagster-daemon` 會因為 `Permission denied` 啟動失敗。
 
@@ -269,7 +282,7 @@ curl -s -o /dev/null -X POST "$BASE" \
 curl -s -o /dev/null -X POST "$BASE" \
   -H "Authorization: Bearer $KC_TOKEN" -H "Content-Type: application/json" -d '{
   "clientId":"superset","protocol":"openid-connect","publicClient":false,
-  "secret":"PQGOjCiQ9lNIy46PRoqgsjEU1b2MVcYD","standardFlowEnabled":true,
+  "secret":"YourSupersetOidcSecret","standardFlowEnabled":true,
   "redirectUris":["https://superset.dai.post.gov.tw/*"]}'
 
 # Client 3: gitlab（Confidential）
@@ -488,7 +501,14 @@ docker exec gitlab gitlab-ctl reconfigure
 > docker restart dtrack-server
 > ```
 > 建議後續版本如果沒有重大改動，直接採用原本的 Dockerfile.dt_apiserver 進行編譯。
-### 3-5. 啟動並註冊 GitLab Runner CI
+### 3-5. 啟動並註冊 GitLab Runner CI / CD
+
+兩個 runner 都跑在 VM3 上，用 tag 區分職責：
+
+| Runner | tag | 負責 |
+|---|---|---|
+| `gitlab-runner-ci` | `vm3,ci` | lint、test、gitleaks、bandit、D-Track |
+| `gitlab-runner-cd` | `vm3,cd` | rsync 推到 VM1 / VM4、雜湊對帳 |
 
 ```bash
 # 在 VM3 執行
@@ -497,22 +517,63 @@ cd ./certs
 ln -s fullcert_202606.crt gitlab.dai.post.gov.tw.crt
 
 cd ..
-docker compose -f docker-compose_vm3_secure.yml --env-file ../env/vm3.env up -d gitlab-runner-ci
+docker compose -f docker-compose_vm3_secure.yml --env-file ../env/vm3.env \
+  up -d gitlab-runner-ci gitlab-runner-cd
 
 # 在 GitLab UI：Admin Area > CI/CD > Runners > New instance runner
-# 複製 Token 後執行 register：
+# 各取一組 Token 後分別 register：
 docker exec gitlab-runner-ci gitlab-runner register \
   --non-interactive \
   --url "https://gitlab.dai.post.gov.tw" \
-  --token "<從GitLab取得的Token>" \
+  --token "<CI Runner Token>" \
   --executor "shell" \
   --description "vm3-ci-runner" \
   --tag-list "vm3,ci"
+
+docker exec gitlab-runner-cd gitlab-runner register \
+  --non-interactive \
+  --url "https://gitlab.dai.post.gov.tw" \
+  --token "<CD Runner Token>" \
+  --executor "shell" \
+  --description "vm3-cd-runner" \
+  --tag-list "vm3,cd,deploy"
 ```
 
 > Runner 的 CA 憑證已預先放在 `workspace/gitlab-runner-ci/certs/gitlab.dai.post.gov.tw.crt`，register 時能信任自簽 GitLab TLS 憑證。
 
-### 3-6. 驗證 Container Registry（與 GitLab 共用 domain）
+**CD runner 需要額外的東西**（rsync、ssh、以 `gitlab_runner` 身分執行）：
+
+```bash
+# CD runner 的 shell executor 需要 rsync 與 ssh client
+docker exec gitlab-runner-cd sh -c \
+  "command -v rsync ssh || (apt-get update && apt-get install -y rsync openssh-client)"
+
+# 掛載 gitlab_runner 的 .ssh（Phase 4A 會建立）
+#   在 docker-compose_vm3_secure.yml 的 gitlab-runner-cd 服務加：
+#     user: "<gitlab_runner 的 UID>:<GID>"
+#     volumes:
+#       - /home/gitlab_runner/.ssh:/home/gitlab_runner/.ssh:ro
+```
+
+> ⚠️ 容器重建後 `apt-get` 裝的東西會消失。長期作法是做一個
+> `Dockerfile.gitlab-runner-cd`（base image 加 `rsync openssh-client`），
+> 跟現有的 `Dockerfile.keycloak`、`Dockerfile.dt_apiserver` 一樣納入映像建置流程。
+
+### 3-6. 安裝 gitleaks 到 GitLab 容器（給伺服器端 hook 用）
+
+Phase 4D 的 pre-receive hook 需要它，先裝好：
+
+```bash
+# 在 VM3
+docker cp gitleaks       gitlab:/usr/local/bin/gitleaks
+docker exec gitlab chmod 755 /usr/local/bin/gitleaks
+docker exec gitlab /usr/local/bin/gitleaks version    # 確認跑得起來
+```
+
+> 同樣要處理「容器重建就消失」的問題，作法見
+> [GitLab維運手冊 · 10_CI_Pipeline設定詳解 · 3-5](./docs/GitLab維運手冊/進階調整/10_CI_Pipeline設定詳解.md#3-5-讓它在容器重建後還在)。
+
+### 3-7. 驗證 Container Registry（與 GitLab 共用 domain）
 
 Container Registry **與 GitLab 共用 `gitlab.dai.post.gov.tw` 同一個 domain**，不需另外申請/設定子網域，僅用不同 **port 5050** 區分（GitLab 官方支援的設定方式：同 domain 不同 port；GitLab 不支援把 Registry 用路徑掛在跟主站完全相同的 domain+port 下）。
 
@@ -531,33 +592,429 @@ docker push gitlab.dai.post.gov.tw:5050/<group>/<project>/myimage:latest
 
 ---
 
-## Phase 4：VM4 — 註冊 GitLab Runner CD
+## Phase 4：版控與 CI/CD 同步（VM1 / VM3 / VM4）
 
-```bash
-# 在 VM4 執行
-cd ./certs
-# 建立一個名為 gitlab.dai.post.gov.tw.crt 的連結，指向你的完整證書鏈
-ln -s fullcert_202606.crt gitlab.dai.post.gov.tw.crt
+> 這個 Phase 建立的是**日後所有程式碼變更的唯一路徑**。建完之後，
+> 沒有人應該再直接登入 VM1 / VM4 改檔案——改了會在隔天的雜湊對帳被抓出來。
+>
+> 建置細節與設計理由見 [GitLab 維運手冊](./docs/GitLab維運手冊/README.md)，
+> 這裡只列建置步驟。
 
-# 在 GitLab UI 另外取得一組 Runner Token（建議獨立的 CD runner）
-cd ..
-docker exec gitlab-runner-cd gitlab-runner register \
-  --non-interactive \
-  --url "https://gitlab.dai.post.gov.tw" \
-  --token "<CD Runner Token>" \
-  --executor "shell" \
-  --description "vm4-cd-runner" \
-  --tag-list "vm4,cd,deploy"
+### 要同步的兩個東西
+
+| repo | 內容 | 部署到 | 部署路徑 |
+|---|---|---|---|
+| `dagster-workspace` | Dagster 程式 + dbt 專案 | **VM4** | `/data/deploy/workspace/dagster_workspace/` |
+| `bcp-scripts` | VM1 的執行腳本與清洗函式 | **VM1** | `/home/bcp_runner/scripts/` |
+
+兩個各自獨立的 repo、各自獨立的 pipeline：合併進 `main` → 自動 rsync 推到對應正式機。
+
+### 同步的方向
+
+```
+VM3（GitLab + CD runner，以 gitlab_runner 身分執行）
+      │
+      ├─ ~/.ssh/gitlab_to_vm4 ──rsync──▶ VM4 的 gitlab_runner
+      └─ ~/.ssh/gitlab_to_vm1 ──rsync──▶ VM1 的 gitlab_runner
 ```
 
-> CD Runner 掛載 `/var/run/docker.sock`，可在 CI/CD pipeline 中執行 `docker compose up` 完成自動部署。
+> 📌 這跟 Phase 5.1 的 `dagster_user → bcp_runner` 是**兩條完全獨立的 SSH 通道**。
+> 不要共用金鑰：那條是「執行期指揮」，這條是「部署」，出事時要能分別停掉。
 
+---
+
+### 4A. 三台 VM 建立 `gitlab_runner` 帳號與免密碼 SSH
+
+**VM4（接收端）：**
+
+```bash
+# 在 VM4，以 root
+useradd -m -s /bin/bash gitlab_runner
+mkdir -p /home/gitlab_runner/.ssh && chmod 700 /home/gitlab_runner/.ssh
+chown -R gitlab_runner:gitlab_runner /home/gitlab_runner/.ssh
+
+# 讓 gitlab_runner 寫得進部署目錄
+# （Dagster 容器是 UID 10001，兩個不同 UID 要共用同一個目錄，靠 ACL）
+mkdir -p /data/deploy/workspace/dagster_workspace
+setfacl -R -m u:gitlab_runner:rwx /data/deploy/workspace/dagster_workspace
+setfacl -d -m u:gitlab_runner:rwx /data/deploy/workspace/dagster_workspace
+#          ↑ -d 是 default ACL，之後 rsync 新建的目錄才會自動繼承
+```
+
+**VM1（接收端）：**
+
+```bash
+# 在 VM1，以 root
+useradd -m -s /bin/bash gitlab_runner
+mkdir -p /home/gitlab_runner/.ssh && chmod 700 /home/gitlab_runner/.ssh
+chown -R gitlab_runner:gitlab_runner /home/gitlab_runner/.ssh
+
+setfacl -R -m u:gitlab_runner:rwx /home/bcp_runner/scripts
+setfacl -d -m u:gitlab_runner:rwx /home/bcp_runner/scripts
+```
+
+**VM3（發送端，產金鑰）：**
+
+```bash
+# 在 VM3，以 root
+useradd -m -s /bin/bash gitlab_runner
+mkdir -p /home/gitlab_runner/.ssh && chmod 700 /home/gitlab_runner/.ssh
+chown -R gitlab_runner:gitlab_runner /home/gitlab_runner/.ssh
+
+su - gitlab_runner
+# 正式環境兩把、測試環境兩把 —— ★正式與測試不可共用金鑰★
+ssh-keygen -t ed25519 -N "" -C "gitlab-cd-to-vm4-prod" -f ~/.ssh/gitlab_to_vm4
+ssh-keygen -t ed25519 -N "" -C "gitlab-cd-to-vm1-prod" -f ~/.ssh/gitlab_to_vm1
+ssh-keygen -t ed25519 -N "" -C "gitlab-cd-to-vm4-stg"  -f ~/.ssh/gitlab_to_vm4_stg
+ssh-keygen -t ed25519 -N "" -C "gitlab-cd-to-vm1-stg"  -f ~/.ssh/gitlab_to_vm1_stg
+chmod 600 ~/.ssh/gitlab_to_*
+```
+
+**派發公鑰**（以 VM4 為例，VM1 同樣做一次）：
+
+```bash
+# 在 VM3 印出公鑰
+cat /home/gitlab_runner/.ssh/gitlab_to_vm4.pub
+
+# 到 VM4，以 root —— ★不要用 ssh-copy-id★（它不會加下面的限制條件）
+cat >> /home/gitlab_runner/.ssh/authorized_keys <<'EOF'
+from="<VM3_IP>",restrict,pty ssh-ed25519 AAAAC3Nz...（貼上公鑰全文） gitlab-cd-to-vm4-prod
+EOF
+chmod 600 /home/gitlab_runner/.ssh/authorized_keys
+chown gitlab_runner:gitlab_runner /home/gitlab_runner/.ssh/authorized_keys
+```
+
+| 限制 | 作用 |
+|---|---|
+| `from="<VM3_IP>"` | 只接受從 VM3 來的連線，金鑰外流到別台機器也用不了 |
+| `restrict` | 關掉 port / agent / X11 forwarding，這條通道不該能當跳板 |
+| `pty` | `restrict` 會連 pty 一起關掉，但 `sudo` 需要，所以加回來 |
+
+**取得 known_hosts**（CD 用 `StrictHostKeyChecking=yes`，不接受未知主機）：
+
+```bash
+# 在 VM3，以 gitlab_runner
+ssh-keyscan -t ed25519,rsa <VM4_IP> > ~/.ssh/known_hosts_vm4
+ssh-keyscan -t ed25519,rsa <VM1_IP> > ~/.ssh/known_hosts_vm1
+
+# ★ 務必人工核對指紋 ★ ssh-keyscan 本身不驗真偽
+# 在 VM4 上：ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+# 在 VM3 上：ssh-keygen -lf ~/.ssh/known_hosts_vm4
+# 兩邊指紋一致才算數
+```
+
+**驗證：**
+
+```bash
+# 在 VM3，以 gitlab_runner
+ssh -i ~/.ssh/gitlab_to_vm4 \
+    -o UserKnownHostsFile=~/.ssh/known_hosts_vm4 \
+    -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes -o BatchMode=yes \
+    gitlab_runner@<VM4_IP> 'echo 登入成功; id'
+```
+
+沒跳密碼提示、直接印出結果就成功了。
+
+**防火牆**需新增兩條：`VM3 → VM4:22`、`VM3 → VM1:22`。
+
+---
+
+### 4B. 安裝 post-deploy 腳本與 sudoers
+
+rsync 過來的檔案屬於 `gitlab_runner`，但實際執行的是別的身分
+（VM4 是 UID 10001、VM1 是 `bcp_runner`），所以部署後要 `chown` 回去。
+
+**VM4：**
+
+```bash
+# 在 VM4，以 root
+install -o root -g root -m 755 deploy/vm4/dai-post-deploy-vm4.sh /usr/local/sbin/
+
+cat > /etc/sudoers.d/dai-gitlab-runner <<'EOF'
+gitlab_runner ALL=(root) NOPASSWD: /usr/local/sbin/dai-post-deploy-vm4.sh
+Defaults!/usr/local/sbin/dai-post-deploy-vm4.sh !requiretty
+EOF
+chmod 440 /etc/sudoers.d/dai-gitlab-runner
+visudo -c        # ★一定要驗★ sudoers 寫錯會讓整台機器的 sudo 失效
+```
+
+**VM1：** 同樣做一次，換成 `deploy/vm1/dai-post-deploy-vm1.sh`。
+
+> 🔒 **為什麼要一支參數寫死的固定腳本，而不是 `NOPASSWD: /bin/chown`**
+> 後者等於把整台機器送給任何拿到部署金鑰的人——可以 `chown` 任意檔案，
+> 包括 `/etc/shadow` 和 `/etc/sudoers`。
+> 腳本本身也必須是 `root:root 0755`：`gitlab_runner` 改得動腳本 = 一樣拿到 root。
+
+這兩支腳本會做：
+
+| VM4 | VM1 |
+|---|---|
+| `chown -R 10001:10001` | `chown -R bcp_runner:bcp_runner` |
+| 目錄 750 / 檔案 640、`.env` 收到 600 | 同左 |
+| `dbt parse` 重產 `manifest.json` | `python -m compileall` 用 VM1 實際的 Python 版本驗語法 |
+
+---
+
+### 4C. 建立兩個 GitLab repo
+
+GitLab UI → New project → Blank project（**不要**勾 Initialize with README）
+
+- `dagster-workspace`
+- `bcp-scripts`
+
+**推上初始程式碼：**
+
+```bash
+# dagster-workspace：本 repo 就是它
+git remote add origin https://gitlab.dai.post.gov.tw/<group>/dagster-workspace.git
+git push -u origin main
+
+# bcp-scripts：從 VM1 現有的檔案初始化
+# 步驟見 gitlab_templates/bcp_scripts_repo/README.md
+```
+
+> ⚠️ `bcp-scripts` 的第一個 commit 是從**一直在跑的正式機**上原封不動複製過來的，
+> 是最容易夾帶金鑰的一次。push 之前務必先自己掃一次：
+> ```bash
+> ci/check_secrets.sh tree
+> ci/check_secrets.sh history
+> ```
+> 掃出東西的話**不要只是刪檔案再 commit**（歷史裡還在），
+> 直接 `rm -rf .git` 重來。
+
+---
+
+### 4D. 安裝伺服器端 pre-receive hook ★最關鍵的一步★
+
+**這一步才是「掃完才能 push 上去」真正生效的地方。**
+
+本地的 pre-commit / pre-push 可以用 `git push --no-verify` 繞過，
+也可能根本沒安裝（新同事、新機器）。
+CI 的 secret-scanning job 則是**東西已經推上 GitLab 之後**才跑的——
+那時候金鑰早就在遠端物件庫裡，只能事後重寫歷史。
+
+pre-receive hook 跑在 GitLab 主機上，利用 git 的 quarantine 機制：
+**回傳非 0 → 整批物件直接丟棄、ref 不動，金鑰從頭到尾沒進過 repo。**
+
+```bash
+# 在 VM3（gitleaks 已在 Phase 3-6 裝好）
+docker cp .gitleaks.toml gitlab:/etc/gitlab/gitleaks.toml
+
+docker exec gitlab mkdir -p /var/opt/gitlab/gitaly/custom_hooks/pre-receive.d
+docker cp ci/server_hooks/pre-receive \
+          gitlab:/var/opt/gitlab/gitaly/custom_hooks/pre-receive.d/10-gitleaks
+docker exec gitlab chmod 755 /var/opt/gitlab/gitaly/custom_hooks/pre-receive.d/10-gitleaks
+docker exec gitlab chown git:git /var/opt/gitlab/gitaly/custom_hooks/pre-receive.d/10-gitleaks
+```
+
+放在 `custom_hooks/pre-receive.d/` 底下是**全域** hook，所有專案自動生效。
+
+**必須驗證它真的有在擋**（沒驗證過的資安控制等於沒有）：
+
+```bash
+# 在你自己的電腦上
+git checkout -b test/pre-receive-hook
+echo 'DB_PASS=ThisIsAFakePasswordForTesting123' > leak_test.txt
+git add leak_test.txt
+git commit --no-verify -m "test: 驗證 pre-receive hook"    # 故意跳過本地 hook
+git push --no-verify -u origin test/pre-receive-hook       # 故意跳過本地 hook
+```
+
+**預期**：
+
+```
+remote: ❌ [DAI] Push 被拒絕：偵測到 1 個疑似機密資訊
+ ! [remote rejected] test/pre-receive-hook -> test/pre-receive-hook (pre-receive hook declined)
+```
+
+看到 `[remote rejected]` 就成功了。清理：
+
+```bash
+git reset --hard HEAD~1
+git checkout main && git branch -D test/pre-receive-hook
+```
+
+> ⚠️ **容器重建後 `/usr/local/bin/gitleaks` 與 hook 會消失。**
+> 長期作法是把三個檔案掛進 `docker-compose_vm3_secure.yml`（`:ro`），
+> 見 [10_CI_Pipeline設定詳解 · 3-5](./docs/GitLab維運手冊/進階調整/10_CI_Pipeline設定詳解.md#3-5-讓它在容器重建後還在)。
+
+---
+
+### 4E. 分支保護、Variables、環境隔離
+
+**正式與測試共用同一個 GitLab，靠三件事隔開**（缺一不可）：
+
+| 機制 | 做什麼 |
+|---|---|
+| 保護分支 | `main` 禁止直接 push，只能透過 MR 進來 |
+| Protected 變數 | 正式環境的連線資訊只有保護分支上的 job 拿得到 |
+| Environment scope | 同一個變數名在 `production` / `staging` 有不同值 |
+
+**分支保護**（兩個 repo 都要）：Settings → Repository → Protected branches
+
+| Branch | Allowed to merge | Allowed to push and merge | Force push |
+|---|---|---|---|
+| `main` | **Maintainers** | **No one** | ❌ |
+| `develop` | Developers + Maintainers | Developers + Maintainers | ❌ |
+
+Settings → Merge requests：勾選 **Pipelines must succeed** 與 **All threads must be resolved**。
+
+> ★ **關鍵設計：Developer 不能合併到 `main`** ★
+> 這樣「有人 code review 過」就是硬性的，不是靠自律——
+> 開發者自己開的 MR，自己按不下 Merge 鍵，一定要另一個人（Maintainer）來按。
+>
+> GitLab CE 沒有 Merge Request Approvals（那是 Premium），
+> 上面這組設定是 CE 上能達到的等效控制。
+> 有 Premium 授權的話再加 Approvals（最少 1 人 + 勾 Prevent approval by author），
+> 見 [04_帳號_權限_分支保護](./docs/GitLab維運手冊/日常維運/04_帳號_權限_分支保護.md#3-關於-code-review-的強制性)。
+
+**CI/CD Variables**（Settings → CI/CD → Variables，每個都要勾 Protected）：
+
+| Key | Type | Masked | Scope | 值 |
+|---|---|---|---|---|
+| `DEPLOY_HOST` | Variable | ✅ | production / staging | 目標機 IP |
+| `DEPLOY_USER` | Variable | ❌ | 兩者 | `gitlab_runner` |
+| `DEPLOY_SSH_KEY` | **File** | — | production / staging | 私鑰完整內容 |
+| `DEPLOY_KNOWN_HOSTS` | **File** | — | production / staging | `known_hosts` 內容 |
+| `DTRACK_URL` | Variable | ❌ | 兩者 | `https://dtrack.dai.post.gov.tw` |
+| `DTRACK_API_KEY` | Variable | ✅ | 兩者 | D-Track API Key |
+| `DTRACK_IMAGE` | Variable | ❌ | 兩者 | 僅 `dagster-workspace` 需要（它的套件在映像檔裡） |
+
+> 私鑰是多行的，**一定要用 File 型別**，Variable 型別會壞掉且無法 mask。
+>
+> **資料庫密碼不在這裡，也不該在這裡。** DB 連線走各機器上的 `.env`
+> （VM4 `dagster_code/.env`、VM1 `/home/bcp_runner/.env`），
+> 那兩個檔案不進版控、rsync 也不傳不刪。
+> 所以 GitLab 被入侵也拿不到 DB 帳密。
+> 隔離是靠「程式碼推到哪台機器，就吃那台機器的 `.env`」達成的。
+
+**驗證隔離有效**：在功能分支跑 `echo "[${DEPLOY_HOST:-空}]"` 應該是空的，
+在 `main` 上應該是 `[MASKED]`。驗完把測試用的 job 刪掉。
+
+---
+
+### 4F. 每日雜湊對帳排程
+
+**在回答**：GitLab 上 `main` 的內容，跟正式機上實際在跑的檔案，還是同一份嗎？
+
+抓得到「rsync 傳到一半」「有人直接 ssh 上機改檔案」「檔案被覆寫」。
+
+GitLab UI → Build → **Pipeline schedules → New schedule**（兩個 repo 都要）：
+
+| 欄位 | 值 |
+|---|---|
+| Description | `每日同步完整性稽核` |
+| Interval Pattern | `0 6 * * *` ← 早於當天第一批 Dagster 排程，發現問題還來得及處理 |
+| Cron timezone | `Asia/Taipei` |
+| Target branch | `main`（一定要，才拿得到 production 變數） |
+| Activated | ✅ |
+
+排程只會跑 `verify:production`，不會誤觸發部署。
+
+除此之外，**每次 CD 部署完也會立刻對一次**（`deploy_rsync.sh` 最後一步），
+不用等到隔天才發現同步不完整。
+
+比對結果會送進 rsyslog（tag `dai/gitlab-sync`），依 Phase 6 的架構集中到
+VM4 的 `/data/log/dai/` 並納入每日 log 雜湊存證。
+
+---
+
+### 4G. 首次部署（★先 dry-run★）
+
+VM1 / VM4 上已經有正在跑的檔案，第一次讓 CD 接管時要特別小心：
+`rsync --delete` 會把「repo 裡沒有」的檔案刪掉。
+
+```bash
+# 1. ★先備份★ 萬一排除清單有漏，這是唯一的救命索
+#    在 VM4
+tar czf /root/backup_before_cd_$(date +%F).tar.gz /data/deploy/workspace/dagster_workspace
+#    在 VM1
+tar czf /root/backup_before_cd_$(date +%F).tar.gz /home/bcp_runner/scripts
+
+# 2. 記下機密檔案的雜湊，等下要核對它們有沒有活下來
+sha256sum /data/deploy/workspace/dagster_workspace/dagster_code/.env
+sha256sum /data/deploy/workspace/dagster_workspace/dbt_project/profiles.yml
+
+# 3. ★一定要先 dry-run★
+ci/deploy_rsync.sh --dry-run
+
+# 4. 逐行檢查輸出，特別注意 deleting 開頭的行
+#      deleting dbt_project/models/OLD_MODEL.sql   ← 這個對，repo 裡確實刪了
+#      deleting dagster_code/.env                  ← ★停！排除清單有問題★
+
+# 5. 確認無誤才真的跑（或在 GitLab 上觸發 deploy job）
+ci/deploy_rsync.sh
+
+# 6. 核對機密檔案還在、內容沒變
+sha256sum /data/deploy/workspace/dagster_workspace/dagster_code/.env
+```
+
+`.env` 和 `profiles.yml` 能活下來，靠的是
+[`deploy_exclude.txt`](./deploy_exclude.txt)——
+**rsync 的 `--delete` 不會刪掉被 `--exclude` 排除的檔案**
+（會刪的是 `--delete-excluded`，我們刻意不用）。
+所以那份清單同時是「不傳清單」和「刪除保護清單」，**漏一行就會洗掉正式機的帳密**。
+
+備份至少保留一個月。
+
+---
+
+### 4H. 通知開發人員安裝本地 hook
+
+每位開發者在自己的機器上，兩個 repo 各做一次：
+
+```bash
+ci/install_hooks.sh
+ci/install_hooks.sh --check    # 確認
+```
+
+需要的工具：`gitleaks`（**必要**）、`black` `flake8` `bandit` `sqlfluff` `pip-audit`（選用）。
+沒裝 gitleaks 的話 hook 會**擋下所有 commit/push**，而不是靜默放行。
+
+詳見 [03_本地環境設定與提交前檢查](./docs/GitLab維運手冊/日常維運/03_本地環境設定與提交前檢查.md)。
+
+---
+
+### Phase 4 檢查清單
+
+```
+[ ] VM1 / VM3 / VM4 都建好 gitlab_runner 帳號
+[ ] VM1 / VM4 目標目錄設好 ACL（含 -d default ACL）
+[ ] VM3 產好四把金鑰（正式 2 + 測試 2），正式與測試不共用
+[ ] 公鑰已派發，且有 from= 與 restrict 限制
+[ ] known_hosts 的指紋人工核對過
+[ ] VM3 → VM4 / VM1 免密碼 SSH 驗證通過
+[ ] 防火牆 VM3→VM4:22、VM3→VM1:22 已開通
+[ ] post-deploy 腳本安裝好（root:root 0755），visudo -c 通過
+[ ] sudo -n post_deploy 驗證通過
+[ ] 兩個 GitLab repo 建好、初始程式碼推上去了
+[ ] bcp-scripts 首次 commit 前掃過 gitleaks
+[ ] ★ pre-receive hook 裝好，且用假金鑰實測過會被拒 ★
+[ ] main 分支保護設好，Developer 按不到 Merge 鍵
+[ ] Pipelines must succeed / All threads resolved 都勾了
+[ ] CI/CD Variables 設好（Protected + Masked + environment scope）
+[ ] 隔離驗證：功能分支拿不到 DEPLOY_HOST
+[ ] 兩個 repo 都設好每日雜湊對帳排程
+[ ] 首次部署前已備份，dry-run 檢查過
+[ ] 首次部署後 .env / profiles.yml 的 sha256 沒變
+[ ] 開發人員都裝好本地 hook
+```
 
 ---
 
 ## Phase 5：VM1 — BCP Pipeline
 ### 5.1 建立 VM4 到 VM1 SSH 免輸入密碼登陸
-先跟別建立連線用 user，VM1:
+
+> 📌 **這條通道跟 Phase 4A 的 `gitlab_runner` 是兩回事，不要搞混、也不要共用金鑰：**
+>
+> | 通道 | 誰對誰 | 什麼時候用 | 做什麼 |
+> |---|---|---|---|
+> | 本節（`dagster_user` → `bcp_runner`） | VM4 → VM1 | **執行期**，每次 sensor 觸發 | Dagster 叫 VM1 跑腳本 |
+> | Phase 4A（`gitlab_runner` → `gitlab_runner`） | VM3 → VM1 | **部署時**，合併 main 之後 | 把新版腳本 rsync 過去 |
+>
+> 分開的理由：用途、時機、風險都不同，出事時要能分別停掉其中一條。
+
+先分別建立連線用 user，VM1:
 ```bash
 # 建立被連線端帳號
 useradd -m -s /bin/bash bcp_runner

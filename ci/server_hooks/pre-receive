@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+# =============================================================================
+# GitLab 伺服器端 pre-receive hook（裝在 VM3）
+# =============================================================================
+# ★ 這一支才是「掃完才能 push 上去」真正生效的地方 ★
+#
+# 本地的 pre-commit / pre-push 可以用 `git push --no-verify` 繞過，
+# 也可以整個沒安裝（新同事、新機器、CI 產生的 commit）。
+# pre-receive 跑在 GitLab 主機上，開發者碰不到，繞不過。
+#
+# 關鍵在 git 的 quarantine 機制：
+#   push 進來的 object 會先落在暫存區（GIT_QUARANTINE_PATH），
+#   pre-receive 回傳非 0 → 整批 quarantine 直接丟掉，
+#   ref 不會前進，物件也不會併進 repo。
+#   → 金鑰**從頭到尾沒有進過遠端 repo**，不需要事後 filter-repo 清歷史。
+#
+# 相對地，CI 的 secret-scanning job 是 push 成功之後才跑的，
+# 那時候東西已經在 repo 裡了，只能算「稽核」，不算「防護」。
+#
+# -----------------------------------------------------------------------------
+# 安裝（VM3，GitLab 容器內）
+# -----------------------------------------------------------------------------
+#   # 1. 找出 custom hooks 目錄（GitLab 15+ 由 gitaly 管）
+#   docker exec gitlab grep -n "custom_hooks_dir" /etc/gitlab/gitlab.rb
+#   #    預設：/var/opt/gitlab/gitaly/custom_hooks
+#
+#   # 2. 放成「全域」hook，所有專案自動生效
+#   docker exec gitlab mkdir -p /var/opt/gitlab/gitaly/custom_hooks/pre-receive.d
+#   docker cp ci/server_hooks/pre-receive \
+#             gitlab:/var/opt/gitlab/gitaly/custom_hooks/pre-receive.d/10-gitleaks
+#   docker exec gitlab chmod 755 /var/opt/gitlab/gitaly/custom_hooks/pre-receive.d/10-gitleaks
+#   docker exec gitlab chown git:git /var/opt/gitlab/gitaly/custom_hooks/pre-receive.d/10-gitleaks
+#
+#   # 3. 放 gitleaks 執行檔與預設設定
+#   docker cp gitleaks        gitlab:/usr/local/bin/gitleaks
+#   docker cp .gitleaks.toml  gitlab:/etc/gitlab/gitleaks.toml
+#   docker exec gitlab chmod 755 /usr/local/bin/gitleaks
+#
+# 詳細步驟與驗證方式：
+#   docs/GitLab維運手冊/進階調整/10_CI_Pipeline設定詳解.md
+# =============================================================================
+
+set -uo pipefail
+
+GITLEAKS_BIN="${GITLEAKS_BIN:-/usr/local/bin/gitleaks}"
+FALLBACK_CONFIG="${DAI_GITLEAKS_CONFIG:-/etc/gitlab/gitleaks.toml}"
+Z40="0000000000000000000000000000000000000000"
+
+# 沒裝 gitleaks 時要「擋下來」而不是「放行」——
+# 靜默失效的資安控制比沒有控制更危險，因為大家會以為它有在跑。
+if [[ ! -x "$GITLEAKS_BIN" ]]; then
+    echo "" >&2
+    echo "❌ [DAI] 伺服器端找不到 gitleaks（${GITLEAKS_BIN}），為安全起見拒絕本次 push。" >&2
+    echo "   請聯絡 GitLab 管理員依 docs/GitLab維運手冊 重新部署 pre-receive hook。" >&2
+    exit 1
+fi
+
+TMPDIR_="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR_"' EXIT
+
+CONFIG="$FALLBACK_CONFIG"
+report="${TMPDIR_}/report.json"
+total=0
+rc=0
+
+while read -r old_oid new_oid ref_name; do
+    [[ -z "${ref_name:-}" ]] && continue
+    # 刪除分支/tag：沒有新內容要掃
+    [[ "$new_oid" == "$Z40" ]] && continue
+
+    # 專案自己帶的 .gitleaks.toml 優先（規則跟本地 hook 完全一致）
+    if git cat-file -e "${new_oid}:.gitleaks.toml" 2>/dev/null; then
+        git show "${new_oid}:.gitleaks.toml" > "${TMPDIR_}/gitleaks.toml" 2>/dev/null \
+            && CONFIG="${TMPDIR_}/gitleaks.toml"
+    fi
+
+    if [[ "$old_oid" == "$Z40" ]]; then
+        # 新分支：掃「這個分支上、其他分支還沒有」的 commit，
+        # 否則第一次推一個大分支會把整個 repo 歷史重掃一遍。
+        log_opts="--no-merges ${new_oid} --not --all"
+    else
+        log_opts="--no-merges ${old_oid}..${new_oid}"
+    fi
+
+    "$GITLEAKS_BIN" detect \
+        --source "." \
+        --config "$CONFIG" \
+        --log-opts="$log_opts" \
+        --report-format json \
+        --report-path "$report" \
+        --redact --no-banner >/dev/null 2>&1 || true
+
+    if [[ -s "$report" ]]; then
+        n="$(python3 -c "
+import json,sys
+try:
+    d=json.load(open('${report}', encoding='utf-8'))
+    print(len(d) if isinstance(d,list) else 0)
+except Exception:
+    print(-1)
+" 2>/dev/null || echo -1)"
+
+        if [[ "$n" == "-1" ]]; then
+            echo "❌ [DAI] gitleaks 報告無法解析（ref: ${ref_name}），為安全起見拒絕 push。" >&2
+            rc=1
+        elif [[ "$n" -gt 0 ]]; then
+            total=$(( total + n ))
+            rc=1
+            echo "" >&2
+            echo "  ref ${ref_name} 發現 ${n} 個疑似金鑰：" >&2
+            python3 - "$report" >&2 <<'PY' || true
+import json, sys
+for i, f in enumerate(json.load(open(sys.argv[1], encoding="utf-8")), 1):
+    print(f"    [{i}] {f.get('RuleID','?')}  {f.get('File','?')}:{f.get('StartLine','?')}")
+    if f.get("Commit"):
+        print(f"        commit {f['Commit'][:12]}  by {f.get('Author','?')}")
+PY
+        fi
+        : > "$report"
+    fi
+done
+
+if [[ $rc -ne 0 ]]; then
+    cat >&2 <<EOF
+
+================================================================================
+❌ [DAI] Push 被拒絕：偵測到 ${total} 個疑似機密資訊
+================================================================================
+這些 commit **沒有**進入遠端 repo（quarantine 已丟棄），所以還來得及好好處理。
+
+  1. 金鑰一旦寫進 commit 就當作已外洩 —— 先去把它作廢並換一把新的。
+  2. 從程式碼裡移除，改讀環境變數：
+        VM4 → dagster_workspace/dagster_code/.env
+        VM1 → /home/bcp_runner/.env
+     這兩個檔案都在 .gitignore 與 rsync 排除清單裡，不會進版控也不會被部署覆蓋。
+  3. 改掉本地已經做好的 commit：
+        git rebase -i <出問題的 commit 的前一個>     # 或
+        git reset --soft HEAD~<n> 後重做
+  4. 重新 push。
+
+確定是誤判（例如範本檔裡的假值）：
+  改 repo 根目錄的 .gitleaks.toml，在 [allowlist] 用最小範圍的 regex 放行，
+  連同 commit 一起推上來（這支 hook 會優先讀你這次推上來的那一份設定），
+  並在 MR 說明為什麼它是安全的。
+
+--no-verify 對這一關無效：這是伺服器端檢查。
+================================================================================
+EOF
+    exit 1
+fi
+
+exit 0

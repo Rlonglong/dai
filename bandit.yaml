@@ -1,0 +1,33 @@
+# =============================================================================
+# bandit 設定 —— Python SAST
+# =============================================================================
+# CI 與本地 hook 都用 `bandit -c bandit.yaml -ll`：
+#   -ll = 只回報 severity >= MEDIUM，低訊噪的 LOW 不擋門。
+#
+# ★ skips 只放「已經人工確認過、且有替代控制」的規則 ★
+#   要新增一條 skip，請在下面寫清楚理由，並在 MR 讓 reviewer 確認。
+# =============================================================================
+
+exclude_dirs:
+  - '/docs'
+  - '/.venv'
+  - '/venv'
+  - '/dagster_workspace/dbt_project/target'
+  - '/dagster_workspace/dbt_project/dbt_packages'
+  - '/tests'
+
+skips:
+  # B404 import subprocess：本專案一定會用到 subprocess/SSH 去指揮 VM1，
+  #      光是 import 不構成弱點；真正的風險由 B602/B605（shell=True）控制，
+  #      那兩條**沒有**被 skip。
+  - B404
+  # B101 assert_used：assert 只出現在測試與型別防呆，不作為安全控制。
+  - B101
+
+# 明確保留（不要加進 skips）的高風險規則，列在這裡當提醒：
+#   B602 subprocess_popen_with_shell_equals_true
+#   B605 start_process_with_a_shell
+#   B608 hardcoded_sql_expressions
+#   B105/B106/B107 hardcoded_password_*
+#   B501 request_with_no_cert_validation
+#   B303/B324 weak hash（MD5/SHA1）

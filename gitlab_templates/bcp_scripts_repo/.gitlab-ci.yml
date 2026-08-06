@@ -1,0 +1,182 @@
+# =============================================================================
+# DAI · bcp-scripts —— GitLab CI/CD（VM1 執行腳本）
+# =============================================================================
+# 跟 dagster_workspace repo 是同一套設計，差別只有三點：
+#   1. SOURCE_DIR = "."      整個 repo 就是部署內容（不是某個子目錄）
+#   2. 部署目標是 VM1        /home/bcp_runner/scripts
+#   3. 有 requirements.txt   所以 SCA 直接掃它，不需要 DTRACK_IMAGE
+#
+# 檢查規則（.gitleaks.toml / .flake8 / bandit.yaml）與 ci/ 底下的腳本
+# 跟 dagster_workspace repo **完全相同**，直接複製過來即可。
+# 兩邊刻意保持一致，開發者換 repo 不用重學一套。
+# =============================================================================
+
+variables:
+  GIT_STRATEGY: fetch
+  GIT_CLEAN_FLAGS: -ffdx
+  GIT_DEPTH: 0
+  DAI_LOG_TAG: "dai/gitlab-sync"
+  SOURCE_DIR: "."
+
+stages:
+  - lint
+  - test
+  - security
+  - deploy
+  - verify
+
+default:
+  before_script:
+    - source ~/.venv/bin/activate || echo "沒有 ~/.venv，改用系統 Python"
+    - python --version
+    - chmod +x ci/*.sh ci/hooks/* 2>/dev/null || true
+  interruptible: true
+
+.rules_mr_and_push: &rules_mr_and_push
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_OPEN_MERGE_REQUESTS == null
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+.rules_security: &rules_security
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_OPEN_MERGE_REQUESTS == null
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+
+# =============================================================================
+# lint
+# =============================================================================
+format-check:
+  stage: lint
+  tags: [vm3, ci]
+  script: [ci/lint.sh format]
+  <<: *rules_mr_and_push
+
+lint-check:
+  stage: lint
+  tags: [vm3, ci]
+  script: [ci/lint.sh style]
+  <<: *rules_mr_and_push
+
+# =============================================================================
+# test
+# =============================================================================
+unit-tests:
+  stage: test
+  tags: [vm3, ci]
+  script:
+    - |
+      if [ ! -d tests ]; then
+        echo "目前沒有 tests/ 目錄，略過單元測試。"
+        exit 0
+      fi
+    - python -m pytest --cov --cov-report=xml --cov-report=term
+  coverage: '/TOTAL.*\s+(\d+%)/'
+  artifacts:
+    when: always
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+    expire_in: 1 week
+  <<: *rules_mr_and_push
+
+syntax-compile:
+  # 比單元測試更基本、但擋得住最痛的問題：
+  # 推一支語法錯的腳本上 VM1，會等到當晚排程跑到才爆，那時候資料已經延遲了。
+  stage: test
+  tags: [vm3, ci]
+  script:
+    - python -m compileall -q .
+  <<: *rules_mr_and_push
+
+# =============================================================================
+# security
+# =============================================================================
+secret-scanning:
+  stage: security
+  tags: [vm3, ci]
+  script:
+    - ci/check_secrets.sh tree
+    - ci/check_secrets.sh history
+  <<: *rules_security
+
+sast-bandit:
+  stage: security
+  tags: [vm3, ci]
+  script: [ci/lint.sh sast]
+  <<: *rules_security
+
+sca-dtrack:
+  stage: security
+  tags: [vm3, ci]
+  script:
+    # 這個 repo 有 requirements.txt，build_sbom.sh 會自動走那條路徑
+    - ci/build_sbom.sh
+  artifacts:
+    when: always
+    paths: [bom.json]
+    expire_in: 1 week
+  <<: *rules_security
+
+# =============================================================================
+# deploy
+# =============================================================================
+deploy:production:
+  stage: deploy
+  tags: [vm3, cd]
+  environment:
+    name: production
+    deployment_tier: production
+  variables:
+    DEPLOY_PATH: "/home/bcp_runner/scripts"
+    POST_DEPLOY_CMD: "sudo /usr/local/sbin/dai-post-deploy-vm1.sh"
+  script:
+    - ci/deploy_rsync.sh
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  interruptible: false
+  resource_group: production-vm1
+
+deploy:staging:
+  stage: deploy
+  tags: [vm3, cd]
+  environment:
+    name: staging
+    deployment_tier: staging
+  variables:
+    DEPLOY_PATH: "/home/bcp_runner/scripts"
+    POST_DEPLOY_CMD: "sudo /usr/local/sbin/dai-post-deploy-vm1.sh"
+  script:
+    - ci/deploy_rsync.sh
+  rules:
+    - if: $CI_COMMIT_BRANCH == "develop"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: manual
+      allow_failure: true
+  interruptible: false
+  resource_group: staging-vm1
+
+# =============================================================================
+# verify —— 每日雜湊對帳
+# =============================================================================
+verify:production:
+  stage: verify
+  tags: [vm3, cd]
+  environment:
+    name: production
+    action: verify
+  variables:
+    DEPLOY_PATH: "/home/bcp_runner/scripts"
+  script:
+    - ci/verify_sync.sh
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
+      allow_failure: false
+  retry:
+    max: 2
+    when: [runner_system_failure, stuck_or_timeout_failure]
