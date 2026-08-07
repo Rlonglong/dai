@@ -2384,43 +2384,34 @@ sudo systemctl restart systemd-journald
 
 **VM4（集中接收端）：**
 ```bash
-# 在 VM4，已 cd 到部署根目錄 /data/deploy
+# 建立 log 儲存目錄
+mkdir -p /var/log/dai
+mkdir -p /var/log/dai-integrity
 
-# 建立 log 儲存目錄（實際落地在資料碟 /data 上）
 sudo mkdir -p /data/log/dai
 sudo chown root:dai_admin /data/log/dai
 sudo chmod 750 /data/log/dai
+mount --bind /data/log/dai /var/log/dai
+restorecon -Rv /var/log/dai
 
 sudo mkdir -p /data/log/dai-integrity
-sudo chown root:dai_admin /data/log/dai-integrity
+sudo chown root:dai_admin /data/log/dai
 sudo chmod 750 /data/log/dai-integrity
-
-# ★ 綁到 /var/log 底下 ★ 跟 VM1/VM3/VM5 一樣的作法，理由見下方說明
-sudo mkdir -p /var/log/dai /var/log/dai-integrity
-sudo mount --bind /data/log/dai            /var/log/dai
-sudo mount --bind /data/log/dai-integrity  /var/log/dai-integrity
-sudo restorecon -Rv /var/log/dai /var/log/dai-integrity
-
-# 寫進 fstab，否則重開機後會寫到本機磁碟且不會有任何錯誤訊息
-echo "/data/log/dai           /var/log/dai           none bind 0 0" | sudo tee -a /etc/fstab
-echo "/data/log/dai-integrity /var/log/dai-integrity none bind 0 0" | sudo tee -a /etc/fstab
-sudo mount -a && findmnt /var/log/dai
+mount --bind /data/log/dai-integrity /var/log/dai-integrity
+restorecon -Rv /var/log/dai-integrity
 
 # 部署設定
+# 複製之前需要進對應的設定檔檢查 ip 是否填對
 sudo cp ./workspace/rsyslog/vm4-server.conf \
   /etc/rsyslog.d/10-dai-server.conf
 sudo cp ./workspace/rsyslog/vm4-integrity-forward.conf \
   /etc/rsyslog.d/25-dai-integrity-fwd.conf
 
-# 轉發雜湊 manifest 到 VM1，要填 VM1 的實際 IP
-# （設定檔裡目前寫死的是 10.10.159.74，換成正式環境的值）
-sudo sed -i "s/10\.10\.159\.74/<VM1實際IP>/g" /etc/rsyslog.d/25-dai-integrity-fwd.conf
-
 # 驗證語法後重啟
 sudo rsyslogd -N1 && sudo systemctl restart rsyslog
 ```
 
-> ⚠️ **VM4 的 bind mount 不能省。** 兩支程式看的是不同路徑：
+> ⚠️ **VM4 的 bind mount 要做。** 兩支程式看的是不同路徑：
 >
 > | 誰 | 用哪個路徑 |
 > |---|---|
@@ -2443,14 +2434,12 @@ mount --bind /run/media/root/D/log/dai /var/log/dai
 restorecon -Rv /var/log/dai
 
 # 複製設定並填入 VM4 的實際 IP
+# 也可以直接進 dai_client.conf 改
 sudo cp ./workspace/rsyslog/dai_client.conf \
   /etc/rsyslog.d/20-dai-client.conf
 sudo sed -i "s/__VM4_IP__/<VM4實際IP>/g" /etc/rsyslog.d/20-dai-client.conf
 
 sudo rsyslogd -N1 && sudo systemctl restart rsyslog
-
-# 確認佔位字串換掉了（沒有輸出才對）
-grep -n '__VM4_IP__' /etc/rsyslog.d/20-dai-client.conf
 ```
 
 > ⚠️ **`mount --bind` 重開機後會消失。** 要寫進 `/etc/fstab` 才會自動掛回來：
@@ -2482,15 +2471,18 @@ VM4 每天算完 log 雜湊之後，會把 manifest 轉發一份到 VM1 存放
 ```bash
 # 在 VM1
 sudo mkdir -p /var/log/dai-integrity
-sudo chown root:dai_admin /var/log/dai-integrity
 sudo chmod 750 /var/log/dai-integrity
+# 同樣需要綁定 log 位置到 /var/log 底下
+mount --bind /run/media/root/D/log /var/log/dai-integrity
+restorecon -Rv /var/log/dai-integrity
 
-sudo cp /run/media/root/D/deploy/workspace/rsyslog/vm1-integrity-server.conf \
+# 設定真實路徑權限
+chown -R root:dai_admin /run/media/root/D/log
+sudo chmod 750 /run/media/root/D/log
+
+sudo cp ./workspace/rsyslog/vm1-integrity-server.conf \
   /etc/rsyslog.d/10-dai-integrity-server.conf
-# 這份會比對來源 IP，只收 VM4 送來的訊息，所以要填 VM4 的實際 IP
-sudo sed -i "s/__VM4_IP__/<VM4實際IP>/g" /etc/rsyslog.d/10-dai-integrity-server.conf
-
-sudo rsyslogd -N1 && sudo systemctl restart rsyslog
+sudo systemctl restart rsyslog
 ```
 
 > ⚠️ VM1 上會有**兩份** rsyslog 設定，兩份都要裝：
