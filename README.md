@@ -88,7 +88,7 @@ deploy_package_vm5.tar.gz
 | Docker 的 rpm | **—** | ✅ | ✅ | ✅ |
 | OS 套件的 rpm（`acl`、`rsync`、`rsyslog`…） | ✅ | ✅ | ✅ | ✅ |
 
-> 🚨 **VM1 不跑容器**：它的 BCP 腳本是由 Dagster 透過 SSH 叫起來、
+> **VM1 不跑容器**：它的 BCP 腳本是由 Dagster 透過 SSH 叫起來、
 > **直接跑在 host 的 Python 3.11 venv 上**。
 > 所以 VM1 的包**沒有 `docker-compose.yml`、沒有 Docker 的 rpm**，
 > 連線資訊放在 `/home/bcp_runner/.env`（Phase 5-4 人工建立）而不是部署根目錄。
@@ -198,7 +198,7 @@ docker compose up -d <服務名>
 
 ### 0-1. 安裝 Docker（**VM3 / VM4 / VM5**）
 
-> 🚨 **VM1 跳過這一節。** VM1 不跑容器，不需要 Docker。
+> **VM1 跳過這一節。** VM1 不跑容器，不需要 Docker。
 > VM1 從 [0-3](#0-3-安裝作業系統套件) 開始做。
 
 請先將安裝檔傳入正式環境，以進行離線安裝，確定以下四種檔案（請自行帶入欲安裝的版本號）已在正式環境。
@@ -340,7 +340,7 @@ polkit.addRule(function(action, subject) {
 EOF
 ```
 
-> 📌 只授權 `chronyd.service` 這一個 unit，不是整個 systemd。
+> 只授權 `chronyd.service` 這一個 unit，不是整個 systemd。
 > 帳號名稱不是 `postadmin` 的話，兩個地方都要改。
 
 #### 0-4-2. 設定對時主機
@@ -522,10 +522,6 @@ cat dai_202606.crt GCA3.crt GRCA3.crt > fullcert_202606.crt
 > `202606` 是憑證到期年月，換憑證時這串會變，屆時要一起改的地方：
 > `.env` 的 `TLS_CERT_LOCAL_PATH`、`certs/` 底下的檔名、nginx 設定、
 > 以及 `certs/gitlab.dai.post.gov.tw.crt`（Phase 3-5）。
->
-> 🚨 **`dai_202606.key` 是私鑰，絕對不能進版控。**
-> `.gitignore` 已經擋掉 `*.key`／`*.crt`，但**網頁上傳檔案會繞過 `.gitignore`**——
-> 憑證一律用 scp／實體媒介帶進正式機，不要放進任何 git repo。
 
 **私鑰權限要收緊**（不收的話 nginx 可能拒絕載入）：
 ```bash
@@ -727,7 +723,7 @@ curl -s "$BASE" -H "Authorization: Bearer $KC_TOKEN" \
 # 應該看到 dagster / superset / gitlab / dependency-track 都在裡面
 ```
 
-> 📌 **如果 `localhost:8080` 連不到**：表示 secure compose 沒有把 Keycloak 的 8080 對外
+> **如果 `localhost:8080` 連不到**：表示 secure compose 沒有把 Keycloak 的 8080 對外
 > 發佈（只走 nginx）。改用容器網路內部呼叫：
 > ```bash
 > docker exec keycloak curl -s -X POST \
@@ -1059,7 +1055,7 @@ docker exec gitlab-runner-cd sh -c "rsync --version | head -1; ssh -V"
 > `Dockerfile.gitlab-runner-cd`（base image 加 `rsync openssh-client`），
 > 跟現有的 `Dockerfile.keycloak`、`Dockerfile.dt_apiserver` 一樣納入映像建置流程。
 
-> 📌 **CD runner 不需要掛載 `/home/gitlab_runner/.ssh`。**
+> **CD runner 不需要掛載 `/home/gitlab_runner/.ssh`。**
 > 部署用的私鑰與 known_hosts 是由 GitLab 的 **File 型別 CI/CD Variable**
 > （`DEPLOY_SSH_KEY`／`DEPLOY_KNOWN_HOSTS`，見 Phase 4E）在 job 執行時寫成暫存檔，
 > `ci/deploy_rsync.sh` 用完就刪。
@@ -1092,7 +1088,7 @@ docker exec gitlab /usr/local/bin/gitleaks version    # 確認容器裡也跑得
 > 開發者本機也要裝同一支（Phase 4H），版本盡量一致，
 > 否則同一份 `.gitleaks.toml` 可能有規則語法不支援。
 
-> 📴 **內網無對外網路完全沒問題。**
+> **內網無對外網路完全沒問題。**
 >
 > | 項目 | 需要網路嗎 | 說明 |
 > |---|---|---|
@@ -1155,7 +1151,7 @@ VM3（GitLab + CD runner，以 gitlab_runner 身分執行）
       └─ ~/.ssh/gitlab_to_vm1 ──rsync──▶ VM1 的 gitlab_runner
 ```
 
-> 📌 這跟 Phase 5.1 的 `dagster_user → bcp_runner` 是**兩條完全獨立的 SSH 通道**。
+> 這跟 Phase 5.1 的 `dagster_user → bcp_runner` 是**兩條完全獨立的 SSH 通道**。
 > 不要共用金鑰：那條是「執行期指揮」，這條是「部署」，出事時要能分別停掉。
 
 ---
@@ -1254,7 +1250,7 @@ ssh -i ~/.ssh/gitlab_to_vm4 \
 
 **防火牆**需新增兩條：`VM3 → VM4:22`、`VM3 → VM1:22`。
 
-> 📌 **這幾把金鑰接下來要做什麼**：
+> **這幾把金鑰接下來要做什麼**：
 > 驗證通過之後，**私鑰內容**與 **known_hosts 內容**要貼進 GitLab 的
 > File 型別 CI/CD Variable（`DEPLOY_SSH_KEY`／`DEPLOY_KNOWN_HOSTS`，見 4E）。
 > 實際跑部署的是 CD runner 容器，它是從那兩個 Variable 拿到金鑰的，
@@ -1317,7 +1313,7 @@ su - gitlab_runner -c "sudo -n /bin/chown root /etc/shadow" ; echo "exit=$?（�
 > # 應該只列出那一支 dai-post-deploy-vmX.sh，沒有別的
 > ```
 
-> 🔒 **為什麼要一支參數寫死的固定腳本，而不是 `NOPASSWD: /bin/chown`**
+> **為什麼要一支參數寫死的固定腳本，而不是 `NOPASSWD: /bin/chown`**
 > 後者等於把整台機器送給任何拿到部署金鑰的人——可以 `chown` 任意檔案，
 > 包括 `/etc/shadow` 和 `/etc/sudoers`。
 > 腳本本身也必須是 `root:root 0755`：`gitlab_runner` 改得動腳本 = 一樣拿到 root。
@@ -1351,7 +1347,7 @@ git push -u origin main
 # 步驟見 docs/GitLab維運手冊/附錄/B_bcp-scripts_repo建立步驟.md
 ```
 
-> 📌 **這一步一定要排在 4E（分支保護）之前。**
+> **這一步一定要排在 4E（分支保護）之前。**
 > 4E 會把 `main` 設成「Allowed to push and merge = No one」，
 > 設完之後就再也不能直接 `git push` 到 `main` 了。
 
@@ -1525,7 +1521,7 @@ git reset --hard HEAD~1
 
 #### 4E-3. CE 做不到的部分，怎麼補
 
-> 🚨 **CE 沒有 Merge Request Approvals。**
+> **CE 沒有 Merge Request Approvals。**
 > 也就是說：**作者可以自己開 MR、自己按 Merge**，
 > GitLab 不會擋。這不是設定漏了，是 CE 就沒有這個功能。
 
@@ -1674,7 +1670,7 @@ GitLab UI → **Build → Pipeline schedules → New schedule**，
 07:00 太早（沒人上班，紅燈擺著沒人處理，批次延遲時還會跟尾巴重疊）；
 18:00 之後太晚（發現問題來不及在當晚批次開跑前修好）。
 
-> 💡 想多一道保險的話，再加一個 `0 19 * * *`：那是「今晚批次開跑前的最後確認」，
+> 想多一道保險的話，再加一個 `0 19 * * *`：那是「今晚批次開跑前的最後確認」，
 > 白天有人手改正式機的話在這裡就攔得下來。
 
 #### 排程二：每季定期弱掃
@@ -1873,7 +1869,7 @@ CI 不需要能刪專案或改權限。
 `ci/build_sbom.sh` 會自動判斷；`dagster-workspace` 沒設 `DTRACK_IMAGE` 的話
 **job 會直接失敗而不是跳過**。
 
-> 📌 這是刻意的。如果只掃 repo 裡的檔案，`dagster-workspace` 會掃出「零個套件」
+> 這是刻意的。如果只掃 repo 裡的檔案，`dagster-workspace` 會掃出「零個套件」
 > 然後綠燈——完全是假的，真正在 VM4 上跑的那一堆套件一個都沒被檢查到。
 > **一個靜默跳過的資安掃描，比沒有掃描更危險。**
 
@@ -1965,7 +1961,7 @@ GitLab UI → Run pipeline（main）→ 看 sca-dtrack job 的 log
 
 ## Phase 5：VM1 — BCP Pipeline
 
-> 🚨 **VM1 跟其他三台不一樣：它不跑容器。**
+> **VM1 跟其他三台不一樣：它不跑容器。**
 >
 > | | VM3 / VM4 / VM5 | **VM1** |
 > |---|---|---|
@@ -1989,7 +1985,7 @@ GitLab UI → Run pipeline（main）→ 看 sca-dtrack job 的 log
 
 ### 5.1 建立 VM4 到 VM1 SSH 免輸入密碼登陸
 
-> 📌 **這條通道跟 Phase 4A 的 `gitlab_runner` 是兩回事，不要搞混、也不要共用金鑰：**
+> **這條通道跟 Phase 4A 的 `gitlab_runner` 是兩回事，不要搞混、也不要共用金鑰：**
 >
 > | 通道 | 誰對誰 | 什麼時候用 | 做什麼 |
 > |---|---|---|---|
@@ -2114,7 +2110,7 @@ wheel             0.38.4
 
 ### 5.3 驗證 Python 環境與資料庫連線
 
-> 🚨 **VM1 沒有容器，所以這裡不是 `docker compose run`。**
+> **VM1 沒有容器，所以這裡不是 `docker compose run`。**
 > 所有東西都直接跑在 host 的 venv 上。
 
 **先確認套件都裝好了：**
@@ -2225,7 +2221,7 @@ ls -l /home/bcp_runner/.env      # 應為 -rw------- bcp_runner bcp_runner
 > ⚠️ **`CSV_ENCRYPTION_KEY` 產生後請另外備份到公司的密碼保管機制。**
 > 這把金鑰換掉之後，先前用舊金鑰加密的 CSV 就解不開了。
 >
-> 📌 `/home/bcp_runner/.env` **不進版控、也不在 rsync 範圍內**
+> `/home/bcp_runner/.env` **不進版控、也不在 rsync 範圍內**
 > （部署目標是 `/home/bcp_runner/scripts/`，不含家目錄）。
 > 這是刻意的：GitLab 被入侵也拿不到這些帳密。
 
@@ -2292,7 +2288,7 @@ sudo systemctl restart systemd-journald
 
 ### 6-2. 部署 rsyslog 設定檔
 
-> 📌 **命名一律用 `dai`**：設定檔名、目錄、syslog tag、hash 腳本路徑
+> **命名一律用 `dai`**：設定檔名、目錄、syslog tag、hash 腳本路徑
 > 全部是 `dai/*`、`/var/log/dai`、`/opt/dai`。
 > 部署包裡的 `workspace/rsyslog/*.conf` 與 `workspace/scripts/log_hash.sh`
 > 已經是這個命名，直接照下面的步驟做即可。
