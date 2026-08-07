@@ -18,6 +18,7 @@
 | **資料流程怎麼運作？我要改一支模型怎麼改？** | [Dagster 維運手冊](./Dagster維運手冊/README.md) |
 | **改完怎麼安全地送上正式機？** | [GitLab 維運手冊](./GitLab維運手冊/README.md) |
 | **弱點掃描紅燈怎麼解？報表怎麼做？** | [D-Track 與 Superset 手冊](./D-Track與Superset手冊/README.md) |
+| **東西壞了怎麼救回來？** | [DAI 備份與災難復原手冊](./DAI%20備份與災難復原手冊/) |
 
 ```
 從零建置              日常改東西              把改動送上線
@@ -62,6 +63,7 @@ README.md            docs/Dagster維運手冊/     docs/GitLab維運手冊/
 2. [GitLab維運手冊 · 00_架構與同步機制總覽](./GitLab維運手冊/00_架構與同步機制總覽.md)
 3. [GitLab維運手冊 · 附錄 A · gitlab_runner 帳號與 SSH 金鑰](./GitLab維運手冊/附錄/A_gitlab_runner帳號與SSH金鑰.md)
 4. [GitLab維運手冊 · 進階調整](./GitLab維運手冊/README.md#進階調整) 全部
+5. [DAI 備份與災難復原手冊](./DAI%20備份與災難復原手冊/) — **建置完成後就該讀，不要等到出事**
 
 ---
 
@@ -85,6 +87,12 @@ docs/
 │   ├── 日常維運/                 ← 照著做就好（含截圖）
 │   ├── 進階調整/
 │   └── 附錄/
+│
+├── DAI 備份與災難復原手冊/        ← 各服務的備份與復原程序
+│   ├── 01. GitLab 備援與復原文件.md
+│   ├── 02. Superset 備援與復原文件.md
+│   ├── 03. Keycloak 備援與復原文件.md
+│   └── 04. Dependency-Track 備援與復原文件.md
 │
 └── GitLab維運手冊/               ← 版控、CI/CD、同步稽核、資安檢查
     ├── README.md
