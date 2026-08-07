@@ -144,14 +144,23 @@ cd <部署根目錄>
 docker compose up -d <服務名>
 ```
 
-> ⚠️ **打包成四份時要一起處理的兩件事，沒做的話下面所有指令都會失敗：**
+> ⚠️ **部署包裡的 compose 目前在 `docker-compose/docker-compose_vmX_secure.yml`。**
+> 解開之後要把它搬到部署根目錄並改名成 `docker-compose.yml`，
+> `.env` 也放同一層：
 >
-> 1. **檔名**：`docker-compose_vmX_secure.yml` → `docker-compose.yml`、
->    `env/vmX.env` → `.env`。
->    （不改名的話，每一行指令都要補回 `-f docker-compose_vmX_secure.yml`）
-> 2. **相對路徑**：compose 檔從 `docker-compose/` 往上搬一層之後，
->    裡面的 bind mount 路徑要跟著改（`../workspace/xxx` → `./workspace/xxx`、
->    `../certs/xxx` → `./certs/xxx`），否則會掛到不存在的目錄。
+> ```bash
+> cd <部署根目錄>
+> mv docker-compose/docker-compose_vm3_secure.yml ./docker-compose.yml
+> rmdir docker-compose
+> vim .env          # 依 0-6 填入實際值
+> ```
+>
+> ✅ **搬動是安全的**：compose 裡的掛載路徑都是 `${TLS_CERT_LOCAL_PATH}`、
+> `${NGINX_VM3_CONFIG_DIR}`、`${GITLAB_HOME}` 這種**由 `.env` 給的絕對路徑**，
+> 不是相對路徑，所以檔案搬層不會影響掛載。
+>
+> 不搬也可以，只是下面每一行指令都要補回
+> `-f docker-compose/docker-compose_vm3_secure.yml`。
 
 ### 各 VM 的部署根目錄
 
@@ -495,27 +504,33 @@ VM1 沒有容器，但 host 仍要信任這張 CA 才連得上 GitLab 等服務�
 
 ```
 <部署根目錄>/certs/
-  GRCA3.crt               # CA 根憑證
-  GCA3.crt                # 中繼憑證
-  dai_202606.crt          # Domain 憑證
-  dai_202606.key          # 私鑰
-  fullchain_202606.crt    # 憑證鏈
+  GRCA3.crt                     # CA 根憑證
+  GCA3.crt                      # 中繼憑證
+  dai_202606.crt                # Domain 憑證
+  dai_202606.key                # 私鑰
+  fullcert_202606.crt           # 憑證鏈
+  gitlab.dai.post.gov.tw.crt    # 給 GitLab Runner 用（內容同憑證鏈，見 Phase 3-5）
 ```
 
 憑證鏈的組法（**順序不能反**：伺服器憑證 → 中繼 → 根）：
 ```bash
 cd <部署根目錄>/certs
-cat dai_202606.crt GCA3.crt GRCA3.crt > fullchain_202606.crt
+cat dai_202606.crt GCA3.crt GRCA3.crt > fullcert_202606.crt
 ```
 
 > ⚠️ **檔名在部署包裡必須跟 `.env`、compose 檔、nginx 設定裡寫的完全一致。**
 > `202606` 是憑證到期年月，換憑證時這串會變，屆時要一起改的地方：
-> `.env`、`certs/` 底下的檔名、nginx 設定、Phase 3-5 的 runner 憑證連結。
+> `.env` 的 `TLS_CERT_LOCAL_PATH`、`certs/` 底下的檔名、nginx 設定、
+> 以及 `certs/gitlab.dai.post.gov.tw.crt`（Phase 3-5）。
+>
+> 🚨 **`dai_202606.key` 是私鑰，絕對不能進版控。**
+> `.gitignore` 已經擋掉 `*.key`／`*.crt`，但**網頁上傳檔案會繞過 `.gitignore`**——
+> 憑證一律用 scp／實體媒介帶進正式機，不要放進任何 git repo。
 
 **私鑰權限要收緊**（不收的話 nginx 可能拒絕載入）：
 ```bash
 chmod 600 dai_202606.key
-chmod 644 GRCA3.crt GCA3.crt dai_202606.crt fullchain_202606.crt
+chmod 644 GRCA3.crt GCA3.crt dai_202606.crt fullcert_202606.crt gitlab.dai.post.gov.tw.crt
 ```
 
 憑證準備好之後，要把 CA 根憑證放進 VM 的信任清單裡面（**四台 VM 都要做**；
@@ -976,23 +991,29 @@ curl -sk https://dtrack.dai.post.gov.tw/api/v1/oidc/available    # 應回 true
 | `gitlab-runner-ci` | `vm3,ci` | lint、test、gitleaks、bandit、D-Track |
 | `gitlab-runner-cd` | `vm3,cd` | rsync 推到 VM1 / VM4、雜湊對帳 |
 
-**Runner 要信任 GitLab 的自簽憑證**，所以先把憑證鏈放到 runner 讀得到的地方。
-GitLab Runner 會去找**檔名等於 GitLab 主機名稱**的憑證檔：
+**Runner 要信任 GitLab 的自簽憑證。**
+GitLab Runner 會去找**檔名等於 GitLab 主機名稱**的憑證檔，
+部署包的 `certs/gitlab.dai.post.gov.tw.crt` 就是這個用途（內容等同憑證鏈）。
+
+先確認它在、而且內容是完整的憑證鏈：
 
 ```bash
 # 在 VM3 執行（已 cd 到部署根目錄）
-# 兩個 runner 各自的 certs 目錄都要有
-for r in ci cd; do
-  mkdir -p ./workspace/gitlab-runner-${r}/certs
-  cp ./certs/fullchain_202606.crt \
-     ./workspace/gitlab-runner-${r}/certs/gitlab.dai.post.gov.tw.crt
-done
-
-ls -l ./workspace/gitlab-runner-*/certs/     # 兩個都要有檔案，不是空的
+ls -l ./certs/gitlab.dai.post.gov.tw.crt
+openssl crl2pkcs7 -nocrl -certfile ./certs/gitlab.dai.post.gov.tw.crt \
+  | openssl pkcs7 -print_certs -noout | grep -c subject
+# 應該 ≥ 2（伺服器憑證 + 中繼／根）
 ```
 
-> 這裡用 `cp` 不用 `ln -s`：憑證是**掛進容器裡**的，符號連結在容器內會指到不存在的路徑。
-> 換憑證時記得這兩份要一起換。
+檔案不在或只有一張憑證的話，從憑證鏈重做一份：
+
+```bash
+cp ./certs/fullcert_202606.crt ./certs/gitlab.dai.post.gov.tw.crt
+```
+
+> 這個檔案由 compose 掛給兩個 runner（路徑看 `.env` 的憑證變數）。
+> 用 `cp` 不用 `ln -s`：符號連結掛進容器後會指到不存在的路徑。
+> **換憑證時這一份要跟著換。**
 
 ```bash
 docker compose up -d gitlab-runner-ci gitlab-runner-cd
@@ -2311,7 +2332,7 @@ mount --bind /run/media/root/D/log/dai /var/log/dai
 restorecon -Rv /var/log/dai
 
 # 複製設定並替換 VM4 IP（若需要）
-sudo cp ./workspace/rsyslog/dai-client.conf \
+sudo cp ./workspace/rsyslog/dai_client.conf \
   /etc/rsyslog.d/20-dai-client.conf
 sudo sed -i "s/10.28.155.40/<VM4實際IP>/g" /etc/rsyslog.d/20-dai-client.conf
 
@@ -2478,7 +2499,7 @@ sudo restorecon -Rv /data/log/dai/
 | superset-init 報錯 `User already exists` | admin 帳號已建立（第二次初始化） | 正常現象，compose 裡有 `|| true` 處理，superset 服務可正常啟動 |
 | GitLab `/users/sign_in` 持續 502，container healthcheck 卻顯示 healthy | Puma 仍在 `Preloading application`，container-level healthcheck（`/healthz`）跟 Rails app 是否真的能服務是兩回事；VM 規格不足時 Puma 會反覆卡住甚至被 OOM 影響 | 確認 VM3 記憶體足夠（GitLab + Registry + D-Track + 兩個 Runner 同機，8GB 會很吃緊）；用 `docker exec gitlab tail -f /var/log/gitlab/puma/current` 確認是否卡在同一行超過 2-3 分鐘 |
 | `dtrack-server` 一直 unhealthy | API server 啟動慢 | healthcheck `start_period=120s`，等足時間；`docker logs dtrack-server` 確認有無 exception |
-| GitLab Runner 無法連線 GitLab | Runner 不信任自簽 TLS | 確認 `workspace/gitlab-runner-{ci,cd}/certs/gitlab.dai.post.gov.tw.crt` 存在（內容為 `certs/fullchain_202606.crt`，見 Phase 3-5） |
+| GitLab Runner 無法連線 GitLab | Runner 不信任自簽 TLS | 確認 `certs/gitlab.dai.post.gov.tw.crt` 存在且內容是完整憑證鏈（見 Phase 3-5） |
 | Registry `docker login` 失敗 `connection refused` | port 5050 未開通，或 nginx-vm3 沒有監聽 5050 | 確認 VM3 compose 的 nginx 服務有 `ports: - "5050:5050"`；確認防火牆已開通 5050 |
 | Keycloak 無法連線 LDAP server（DNS 解析失敗） | `dns:` 設定的公司 DNS IP 不正確，或公司 LDAP 主機名稱不在該 DNS 區域內 | `docker exec keycloak getent hosts <LDAP主機名稱>` 確認解析結果；必要時改用 LDAP server 的 IP 字面值取代主機名稱 |
 | multipass/SSH 連線逾時、`docker exec` 卡住 | Host 記憶體不足導致 VM 整體緩慢（GitLab 是最吃資源的服務） | 確認 VM3 規格足夠，正式環境若用實體/虛擬機通常不會有此問題，純測試環境（如 multipass）需注意 host 總資源是否超賣 |
