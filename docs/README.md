@@ -10,13 +10,14 @@
 
 ---
 
-## 三份文件，各回答不同的問題
+## 四份文件，各回答不同的問題
 
 | 你想知道 | 看哪一份 |
 |---|---|
 | **這套系統怎麼從零建起來？** | [部署手冊（repo 根目錄 README.md）](../README.md) |
 | **資料流程怎麼運作？我要改一支模型怎麼改？** | [Dagster 維運手冊](./Dagster維運手冊/README.md) |
 | **改完怎麼安全地送上正式機？** | [GitLab 維運手冊](../gitlab_workspace/GitLab維運手冊/README.md) |
+| **弱點掃描紅燈怎麼解？報表怎麼做？** | [D-Track 與 Superset 手冊](./D-Track與Superset手冊/README.md) |
 
 ```
 從零建置              日常改東西              把改動送上線
@@ -24,6 +25,11 @@
 部署手冊    ─────▶  Dagster維運手冊  ─────▶  GitLab維運手冊
 README.md            docs/Dagster維運手冊/     gitlab_workspace/GitLab維運手冊/
 （一次性）            （天天用）                （天天用）
+                                                    │
+                                          資安擋門了 / 要看報表
+                                                    ▼
+                                        D-Track與Superset手冊
+                                        docs/D-Track與Superset手冊/
 ```
 
 ---
@@ -35,6 +41,7 @@ README.md            docs/Dagster維運手冊/     gitlab_workspace/GitLab維運
 1. [Dagster維運手冊 · 00_系統架構總覽](./Dagster維運手冊/00_系統架構總覽.md) — 先建立全貌
 2. [Dagster維運手冊 · 01_維運人員_每日操作手冊](./Dagster維運手冊/日常維運/01_維運人員_每日操作手冊.md) — 每天看排程
 3. [GitLab維運手冊 · 02_維運人員_每日檢查](../gitlab_workspace/GitLab維運手冊/日常維運/02_維運人員_每日檢查.md) — 每天看 pipeline 與雜湊對帳
+4. [D-Track與Superset手冊 · 03_D-Track_看懂弱點報告](./D-Track與Superset手冊/日常維運/03_D-Track_看懂弱點報告.md) — 每天確認 main 的 Critical 是 0
 
 ### 我是開發人員（改模型、加資料表）
 
@@ -43,6 +50,11 @@ README.md            docs/Dagster維運手冊/     gitlab_workspace/GitLab維運
 3. [GitLab維運手冊 · 03_本地環境設定與提交前檢查](../gitlab_workspace/GitLab維運手冊/日常維運/03_本地環境設定與提交前檢查.md) — **新機器第一件事**
 4. [GitLab維運手冊 · 01_開發人員_日常開發流程](../gitlab_workspace/GitLab維運手冊/日常維運/01_開發人員_日常開發流程.md)
 5. 然後依你要做的事查 [Dagster維運手冊 · 日常維運](./Dagster維運手冊/README.md#日常維運)
+6. MR 被資安掃描擋住時 → [D-Track與Superset手冊 · 04_弱掃紅燈與MR被卡住的解除流程](./D-Track與Superset手冊/日常維運/04_弱掃紅燈與MR被卡住的解除流程.md)
+
+### 我是業務單位（只是要看報表）
+
+1. [D-Track與Superset手冊 · 01_Superset_使用手冊](./D-Track與Superset手冊/日常維運/01_Superset_使用手冊.md)
 
 ### 我是系統／GitLab 管理員
 
@@ -65,6 +77,13 @@ docs/
 │   ├── 01_資料夾結構說明.md
 │   ├── 日常維運/                 ← 照著做就好（含截圖）
 │   ├── 進階調整/                 ← 要改程式碼才能達成
+│   └── 附錄/
+│
+├── D-Track與Superset手冊/        ← 弱點掃描與報表這兩套 UI 系統
+│   ├── README.md
+│   ├── 00_兩套系統總覽.md
+│   ├── 日常維運/                 ← 照著做就好（含截圖）
+│   ├── 進階調整/
 │   └── 附錄/
 │
 └── （GitLab 維運手冊在 ../gitlab_workspace/GitLab維運手冊/）

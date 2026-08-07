@@ -141,6 +141,12 @@ pip freeze > requirements.txt
 
 ## 5. 掃出弱點怎麼處理
 
+> 👉 **完整的一步一步解除流程**（含 metrics 要 Refresh、例外綁在哪個 version、
+> 緊急放行的做法與代價）在
+> [D-Track與Superset手冊 · 04_弱掃紅燈與MR被卡住的解除流程](../../../docs/D-Track與Superset手冊/日常維運/04_弱掃紅燈與MR被卡住的解除流程.md)。
+> 這一節只講重點。
+
+
 pipeline 紅燈時，job log 長這樣：
 
 ```
@@ -272,6 +278,9 @@ Projects → 篩掉 `main` 以外、且最後更新超過三個月的版本 → 
 ---
 
 ## 相關文件
+
+- **解除流程（紅燈了怎麼辦）** → [D-Track與Superset手冊 · 04](../../../docs/D-Track與Superset手冊/日常維運/04_弱掃紅燈與MR被卡住的解除流程.md)
+- D-Track 網頁怎麼看 → [D-Track與Superset手冊 · 03](../../../docs/D-Track與Superset手冊/日常維運/03_D-Track_看懂弱點報告.md)
 
 - CI 各 job 說明 → [10_CI_Pipeline設定詳解](./10_CI_Pipeline設定詳解.md)
 - 變數怎麼設 → [13_Variables與環境隔離](./13_Variables與環境隔離.md)

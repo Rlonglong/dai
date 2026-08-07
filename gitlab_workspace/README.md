@@ -56,7 +56,8 @@ gitlab_workspace/                    ← ★整包放進 deploy_package_vm3★
 │       ├── deploy_exclude.txt
 │       └── requirements.txt
 │
-└── dtrack/                          ← D-Track 相關素材（API Key 申請、team 權限）
+└── （D-Track 的 API Key 申請、team 權限、弱點處理流程在
+     ../docs/D-Track與Superset手冊/）
 ```
 
 ### 不在這個資料夾、但屬於同一套機制的東西
