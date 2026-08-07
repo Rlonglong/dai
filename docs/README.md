@@ -113,19 +113,19 @@ docs/
 ## 相關的非文件檔案
 
 > 📌 **這個 repo 不會被直接執行。** CI/CD 素材集中在
-> [`cicd_template/`](../cicd_template/README.md)，
+> [`cicd_template/`](../deploy_package_vm3/cicd_template/README.md)，
 > 用 `install.sh` 複製到 GitLab 上真正在跑的兩個 repo。
 
 | 位置 | 內容 |
 |---|---|
-| [`cicd_template/`](../cicd_template/README.md) | **CI/CD 素材總集**，含 `install.sh` 一次複製到目標 repo |
-| [`cicd_template/common/ci/`](../cicd_template/common/ci) | pipeline 與 git hook 用的腳本（兩個 repo 共用） |
-| [`cicd_template/common/.gitleaks.toml`](../cicd_template/common/.gitleaks.toml) | 機密偵測規則（本機 hook / 伺服器 hook / CI 共用同一份） |
-| [`cicd_template/dagster-workspace/`](../cicd_template/dagster-workspace) | `dagster-workspace` repo 專屬：`.gitlab-ci.yml`、`.gitignore`、`deploy_exclude.txt` |
-| [`cicd_template/bcp-scripts/`](../cicd_template/bcp-scripts) | `bcp-scripts` repo 專屬：同上 + `requirements.txt` |
-| [`gitlab_workspace/server_hooks/pre-receive`](../gitlab_workspace/server_hooks/pre-receive) | 裝在 VM3 GitLab 容器裡的伺服器端 hook |
-| [`gitlab_workspace/post_deploy/`](../gitlab_workspace/post_deploy) | 要安裝到 VM1 / VM4 上的 post-deploy 腳本 |
-| [`dagster_workspace/`](../dagster_workspace) | Dagster 程式與 dbt 專案（會被 CD rsync 到 VM4） |
+| [`cicd_template/`](../deploy_package_vm3/cicd_template/README.md) | **CI/CD 素材總集**，含 `install.sh` 一次複製到目標 repo |
+| [`cicd_template/common/ci/`](../deploy_package_vm3/cicd_template/common/ci) | pipeline 與 git hook 用的腳本（兩個 repo 共用） |
+| [`cicd_template/common/.gitleaks.toml`](../deploy_package_vm3/cicd_template/common/.gitleaks.toml) | 機密偵測規則（本機 hook / 伺服器 hook / CI 共用同一份） |
+| [`cicd_template/dagster-workspace/`](../deploy_package_vm3/cicd_template/dagster-workspace) | `dagster-workspace` repo 專屬：`.gitlab-ci.yml`、`.gitignore`、`deploy_exclude.txt` |
+| [`cicd_template/bcp-scripts/`](../deploy_package_vm3/cicd_template/bcp-scripts) | `bcp-scripts` repo 專屬：同上 + `requirements.txt` |
+| [`gitlab_workspace/server_hooks/pre-receive`](../deploy_package_vm3/gitlab_workspace/server_hooks/pre-receive) | 裝在 VM3 GitLab 容器裡的伺服器端 hook |
+| [`gitlab_workspace/post_deploy/`](../deploy_package_vm3/gitlab_workspace/post_deploy) | 要安裝到 VM1 / VM4 上的 post-deploy 腳本 |
+| [`dagster_workspace/`](deploy_package_vm4/workspace/dagster_workspace) | Dagster 程式與 dbt 專案（會被 CD rsync 到 VM4） |
 | [`.gitignore`](../.gitignore) | **本 repo 自己的**版控排除清單 |
 
 > 新 repo 要納入 CI/CD 的完整步驟，見

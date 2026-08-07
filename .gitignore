@@ -1,7 +1,14 @@
 # =============================================================================
-# DAI · dagster_workspace repo
+# DAI · 部署包來源 repo（就是這個 repo）
 # =============================================================================
 # 這份檔案決定「什麼進版控」。
+#
+# ⚠️ 這**不是**兩個 GitLab repo 用的那份。
+#    `dagster-workspace` / `bcp-scripts` 各自的 .gitignore 在
+#    deploy_package_vm3/cicd_template/{dagster-workspace,bcp-scripts}/.gitignore，
+#    由 install.sh 複製進去。那兩份的路徑前綴跟這裡不一樣（那邊沒有
+#    deploy_package_vm4/workspace/ 這一層），改規則時三份都要看一下。
+#
 # 另有 deploy_exclude.txt 決定「rsync 不傳、也不刪」什麼 —— 兩者是不同的事，
 # 新增一種執行期產物時請兩份都加。
 # 對照說明：docs/GitLab維運手冊/進階調整/11_CD_rsync部署機制.md
@@ -15,8 +22,8 @@
 !.env.example
 *.env
 !env.example
-dagster_workspace/dagster_code/.env
-dagster_workspace/dbt_project/profiles.yml
+deploy_package_vm4/workspace/dagster_workspace/dagster_code/.env
+deploy_package_vm4/workspace/dagster_workspace/dbt_project/profiles.yml
 
 # 金鑰 / 憑證 / 密碼檔
 *.pem
@@ -28,6 +35,11 @@ dagster_workspace/dbt_project/profiles.yml
 *.crt
 *.cer
 !**/*.crt.example
+# 例外：部署包裡的 CA 根／中繼憑證是公開資訊（不是機密），
+#       四個包都要帶著它才能讓 host 信任內部服務，所以明確放行。
+#       ★私鑰（*.key）不在放行之列，一律照上面的規則擋掉。★
+!deploy_package_vm*/certs/GRCA3.crt
+!deploy_package_vm*/certs/GCA3.crt
 id_rsa*
 id_ed25519*
 *.ppk
@@ -37,7 +49,7 @@ id_ed25519*
 
 # -----------------------------------------------------------------------------
 # 2. 真實資料（絕對不可進版控：本系統處理的是個資與交易明細）
-#     dbt seeds 若日後要用，請用 !dagster_workspace/dbt_project/seeds/ 明確放行
+#     dbt seeds 若日後要用，請用 !deploy_package_vm4/workspace/dagster_workspace/dbt_project/seeds/ 明確放行
 # -----------------------------------------------------------------------------
 *.csv
 *.tsv
@@ -57,24 +69,24 @@ data/
 # -----------------------------------------------------------------------------
 # 3. Dagster 執行期產物
 # -----------------------------------------------------------------------------
-dagster_workspace/dagster_home/storage/
-dagster_workspace/dagster_home/history/
-dagster_workspace/dagster_home/logs/
-dagster_workspace/dagster_home/schedules/
-dagster_workspace/dagster_home/compute_logs/
-dagster_workspace/dagster_home/.telemetry/
-dagster_workspace/dagster_home/*.db
-dagster_workspace/dagster_home/*.sqlite3
+deploy_package_vm4/workspace/dagster_workspace/dagster_home/storage/
+deploy_package_vm4/workspace/dagster_workspace/dagster_home/history/
+deploy_package_vm4/workspace/dagster_workspace/dagster_home/logs/
+deploy_package_vm4/workspace/dagster_workspace/dagster_home/schedules/
+deploy_package_vm4/workspace/dagster_workspace/dagster_home/compute_logs/
+deploy_package_vm4/workspace/dagster_workspace/dagster_home/.telemetry/
+deploy_package_vm4/workspace/dagster_workspace/dagster_home/*.db
+deploy_package_vm4/workspace/dagster_workspace/dagster_home/*.sqlite3
 .dagster/
 tmp*/
 
 # -----------------------------------------------------------------------------
 # 4. dbt 執行期產物（manifest 由 CD 在 VM4 上重新產生，不進版控）
 # -----------------------------------------------------------------------------
-dagster_workspace/dbt_project/target/
-dagster_workspace/dbt_project/logs/
-dagster_workspace/dbt_project/dbt_packages/
-dagster_workspace/dbt_project/package-lock.yml
+deploy_package_vm4/workspace/dagster_workspace/dbt_project/target/
+deploy_package_vm4/workspace/dagster_workspace/dbt_project/logs/
+deploy_package_vm4/workspace/dagster_workspace/dbt_project/dbt_packages/
+deploy_package_vm4/workspace/dagster_workspace/dbt_project/package-lock.yml
 .user.yml
 
 # -----------------------------------------------------------------------------

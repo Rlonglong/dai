@@ -1,0 +1,16 @@
+[tool.black]
+line-length = 120
+target-version = ["py311"]
+extend-exclude = '''
+/(
+    \.git
+  | \.venv
+  | docs
+  | dagster_workspace/dbt_project/target
+  | dagster_workspace/dbt_project/dbt_packages
+)/
+'''
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

@@ -70,23 +70,33 @@ deploy_package_vm5.tar.gz
 ```
 
 **每台 VM 只會拿到自己那一份**，解開之後就是那台機器的完整部署目錄。
+**每個包裡都有一份 `README.md`，寫清楚那個包的每一樣東西要去哪裡**：
+
+| 包 | 包內說明 |
+|---|---|
+| VM1 | [`deploy_package_vm1/README.md`](./deploy_package_vm1/README.md) |
+| VM3 | [`deploy_package_vm3/README.md`](./deploy_package_vm3/README.md) |
+| VM4 | [`deploy_package_vm4/README.md`](./deploy_package_vm4/README.md) |
+| VM5 | [`deploy_package_vm5/README.md`](./deploy_package_vm5/README.md) |
 
 ### 四個包各自要放什麼
 
 | | VM1 | VM3 | VM4 | VM5 |
 |---|---|---|---|---|
 | `docker-compose.yml` | **—** | ✅ | ✅ | ✅ |
-| `.env` | **—**（見下） | ✅ | ✅ | ✅ |
-| `certs/` | ✅ | ✅ | ✅ | ✅ |
+| `.env.example` → 自己 `cp` 成 `.env` | **—**（見下） | ✅ | ✅ | ✅ |
+| `certs/` | 只有 CA 鏈 | 完整 | 只有 CA 鏈 | 完整 |
+| `security/`（seccomp profile） | — | ✅ | ✅ | ✅ |
 | `workspace/`（該 VM 用到的部分） | ✅ | ✅ | ✅ | ✅ |
-| `secure_report/` | — | ✅ | ✅ | ✅ |
-| `gitlab_workspace/`（hook、post-deploy、repo 素材） | — | ✅ | — | — |
-| `dagster_workspace/`（Dagster 程式與 dbt 專案） | — | — | ✅ | — |
-| `python_env/`（離線 wheel + python3.11 rpm） | ✅ | — | — | — |
-| ODBC 驅動 rpm（`msodbcsql18`、`unixODBC`） | ✅ | — | — | — |
-| `gitleaks_*_linux_x64.tar.gz` | — | ✅ | — | — |
-| Docker 的 rpm | **—** | ✅ | ✅ | ✅ |
-| OS 套件的 rpm（`acl`、`rsync`、`rsyslog`…） | ✅ | ✅ | ✅ | ✅ |
+| `os_packages/docker/`（Docker 的 rpm） | **—** | ✅ | ✅ | ✅ |
+| `dockerfile/`（重編映像用） | — | ✅ | — | — |
+| `gitlab_workspace/`（hook、post-deploy） | — | ✅ | — | — |
+| `cicd_template/`（建 GitLab repo 的素材） | 只有 bcp-scripts 那半 | 完整 | — | — |
+| `workspace/dagster_workspace/`（Dagster 程式與 dbt 專案） | — | — | ✅ | — |
+| `python_env/`（離線 wheel + python3.11 rpm + ODBC 驅動） | ✅ | — | — | — |
+| `scripts/`（BCP 腳本初始內容） | ✅ | — | — | — |
+| `gitleaks_*_linux_x64.tar.gz` | — | 另外帶進來 | — | — |
+| OS 套件的 rpm（`acl`、`rsync`、`rsyslog`…） | 另外帶進來 | 另外帶進來 | 另外帶進來 | 另外帶進來 |
 
 > **VM1 不跑容器**：它的 BCP 腳本是由 Dagster 透過 SSH 叫起來、
 > **直接跑在 host 的 Python 3.11 venv 上**。
@@ -97,29 +107,39 @@ deploy_package_vm5.tar.gz
 > 但只放在 VM3 的包裡**，部署時由 VM3 `scp` 過去（見 Phase 4B）。
 > 這樣「腳本的唯一來源」只有一份，不會出現三台機器各有一份舊版的情況。
 
-### repo 根目錄那些檔案為什麼不能收進資料夾
+> 📌 **憑證只給各 VM 真的用得到的那幾張。**
+> VM3／VM5 對外提供 HTTPS，所以有完整憑證與私鑰；
+> VM1／VM4 不終結 TLS，只需要 CA 根與中繼（`GRCA3.crt`、`GCA3.crt`）
+> 讓 host 信任內部服務，**不放私鑰**。
 
-`.gitlab-ci.yml`、`.gitignore`、`.gitleaks.toml`、`.flake8`、`.sqlfluff`、
-`pyproject.toml`、`deploy_exclude.txt`、`README.md`、`LICENSE`
-**必須留在 repo 根目錄**，因為工具是固定去那裡找的：
+### `cicd_template/` 在哪裡、怎麼用
 
-| 檔案 | 誰在讀它 | 搬走的後果 |
+CI/CD 的素材（`ci/` 腳本、`.gitlab-ci.yml`、`.gitleaks.toml`、`.flake8`、
+`pyproject.toml`、`deploy_exclude.txt`）**不是部署到某台機器上執行的東西**，
+而是「建 GitLab repo 時要複製進 repo 根目錄」的樣板。
+
+它放在**用得到它的那兩個包裡**：
+
+| 包 | 路徑 | 用來建哪個 repo |
 |---|---|---|
-| `.gitlab-ci.yml` | GitLab | pipeline 直接不會跑（除非改專案設定的 CI path） |
-| `.gitignore` | git | 排除規則失效 |
-| `.gitleaks.toml` | gitleaks（本地 hook / 伺服器 hook / CI 三邊共用） | 每個呼叫點都要補 `-c` 參數 |
-| `.flake8` | flake8 | 只認 repo 根目錄的 `.flake8` / `setup.cfg` / `tox.ini` |
-| `.sqlfluff` | sqlfluff | 由檔案往上找到 repo 根 |
-| `pyproject.toml` | black | 同上 |
-| `deploy_exclude.txt` | `ci/deploy_rsync.sh` | rsync 少了刪除保護清單，**下次部署會洗掉正式機的 `.env`** |
-| `README.md` / `LICENSE` | 人 | GitLab 專案首頁不會顯示 |
+| VM3 | `deploy_package_vm3/cicd_template/` | `dagster-workspace` 與 `bcp-scripts` 都可以 |
+| VM1 | `deploy_package_vm1/cicd_template/` | `bcp-scripts`（因為它是從 VM1 現有的腳本初始化的） |
 
-**這幾個檔案不影響四個 zip 的整潔**——它們屬於 GitLab repo，
-不會出現在部署包裡（`deploy_exclude.txt` 已經把 `ci/`、`.gitlab-ci.yml`
-這些排除掉了）。**部署包裡看到的只有上面那張表列的東西。**
+複製方式一律用 `install.sh`，**不要手動 `cp`**（會漏檔案、會漏 `chmod +x`）：
 
-> 唯一搬得動、也已經搬掉的是 `bandit.yaml` → `ci/bandit.yaml`
-> （它是用 `-c` 明確指定路徑的，不靠自動搜尋）。
+```bash
+cd <部署根目錄>/cicd_template
+./install.sh <目標repo路徑> <dagster-workspace|bcp-scripts> --dry-run   # 先看會做什麼
+./install.sh <目標repo路徑> <dagster-workspace|bcp-scripts>             # 確認後實際複製
+```
+
+實際步驟見 [Phase 4C](#4c-建立兩個-gitlab-repo)。
+
+> **為什麼這些檔案一定要在 repo 根目錄**：工具是固定去那裡找的。
+> `.gitlab-ci.yml` 搬走 pipeline 就不會跑；`.flake8` 只認 repo 根；
+> `deploy_exclude.txt` 少了的話，**下次部署會洗掉正式機的 `.env`**。
+> 所以做法是「集中維護一份 → 用 `install.sh` 複製到各 repo 根目錄」。
+> 完整說明見 [`cicd_template/README.md`](./deploy_package_vm3/cicd_template/README.md)。
 
 ---
 
@@ -129,60 +149,58 @@ deploy_package_vm5.tar.gz
 
 ```
 <部署根目錄>/                    ← 以 VM3 為例：/run/media/root/D/deploy
-├── docker-compose.yml          ← 這台 VM 的 secure compose
-├── .env                        ← 這台 VM 的環境變數
+├── docker-compose.yml          ← 這台 VM 的 secure compose（解開就在這一層）
+├── .env.example                ← 範本，要 cp 成 .env 再填
+├── .env                        ← 這台 VM 的環境變數（你自己建的）
 ├── certs/                      ← TLS 憑證
+├── security/                   ← seccomp profile
+├── os_packages/                ← 離線安裝用的 rpm
 ├── workspace/                  ← 各服務的設定檔與資料掛載點
 └── ...
 ```
 
-`.env` 跟 `docker-compose.yml` **放在同一層**，`docker compose` 會自動讀同層的 `.env`，
-所以指令不用再帶 `-f` 和 `--env-file`：
+**`docker-compose.yml`、`.env`、`certs/`、`security/`、`workspace/` 全部在同一層。**
+`docker compose` 會自動讀同層的 `.env`，compose 裡的相對路徑
+（`./security/...`、`./workspace/...`）也是以這一層為基準，
+所以指令不用帶 `-f`、也不用帶 `--env-file`：
 
 ```bash
 cd <部署根目錄>
 docker compose up -d <服務名>
 ```
 
-> ⚠️ **部署包裡的 compose 目前在 `docker-compose/docker-compose_vmX_secure.yml`。**
-> 解開之後要把它搬到部署根目錄並改名成 `docker-compose.yml`，
-> `.env` 也放同一層：
+> ⚠️ **不要把 `docker-compose.yml` 搬到別層。**
+> compose 裡有兩種路徑，只有一種搬得動：
 >
-> ```bash
-> cd <部署根目錄>
-> mv docker-compose/docker-compose_vm3_secure.yml ./docker-compose.yml
-> rmdir docker-compose
-> vim .env          # 依 0-6 填入實際值
-> ```
+> | 寫法 | 例子 | 搬層之後 |
+> |---|---|---|
+> | `.env` 給的絕對路徑 | `${TLS_CERT_LOCAL_PATH}`、`${GITLAB_HOME}` | 不受影響 |
+> | **相對路徑** | `./security/seccomp-gitlab.json`、`./workspace/nginx/conf.d`、`env_file: .env` | **會壞掉** |
 >
-> ✅ **搬動是安全的**：compose 裡的掛載路徑都是 `${TLS_CERT_LOCAL_PATH}`、
-> `${NGINX_VM3_CONFIG_DIR}`、`${GITLAB_HOME}` 這種**由 `.env` 給的絕對路徑**，
-> 不是相對路徑，所以檔案搬層不會影響掛載。
->
-> 不搬也可以，只是下面每一行指令都要補回
-> `-f docker-compose/docker-compose_vm3_secure.yml`。
+> 真的要放別的地方的話，這三種相對路徑都要跟著改。
 
 ### 各 VM 的部署根目錄
 
-| VM | 部署根目錄 | 說明 |
+| VM | 部署根目錄（部署包解到這裡） | 說明 |
 |----|-----------|------|
+| VM1 | `/run/media/root/D/deploy` | **不跑容器**，這裡只是離線素材的落點，見下 |
 | VM3 | `/run/media/root/D/deploy` | 資料碟掛在 `/run/media/root/D` |
 | VM4 | `/data/deploy` | 較早申請的機器，資料碟掛在 `/data` |
 | VM5 | `/run/media/root/D/deploy` | 資料碟掛在 `/run/media/root/D` |
 
-> ⚠️ **VM1 不在這張表裡，因為它不跑容器。**
-> VM1 沒有 `docker-compose.yml`、也沒有部署根目錄的 `.env`，
-> 它的東西散在幾個固定位置：
+> ⚠️ **VM1 的部署根目錄只是「素材放置區」，不是它的執行位置。**
+> VM1 沒有 `docker-compose.yml`、也沒有部署根目錄的 `.env`。
+> 解開之後要把東西裝到／複製到下面這幾個固定位置，**真正在跑的是這些**：
 >
-> | 位置 | 內容 |
-> |---|---|
-> | `/home/bcp_runner/scripts/` | 執行腳本（由 CD 從 VM3 rsync 過來） |
-> | `/home/bcp_runner/.env` | 連線資訊與金鑰（人工建立，不進版控、不被 rsync 動到） |
-> | `/run/media/root/D/python_env/dai_venv/` | Python 3.11 虛擬環境 |
-> | `/run/media/root/D/python_env/req/` | 離線安裝用的 wheel |
-> | `/run/media/root/D/data/` | 落地檔工作目錄 |
+> | 位置 | 內容 | 從哪裡來 |
+> |---|---|---|
+> | `/home/bcp_runner/scripts/` | 執行腳本 | 部署包的 `scripts/`，之後由 CD 從 VM3 rsync 覆蓋 |
+> | `/home/bcp_runner/.env` | 連線資訊與金鑰 | 人工建立，不進版控、不被 rsync 動到（Phase 5-4） |
+> | `/run/media/root/D/python_env/dai_venv/` | Python 3.11 虛擬環境 | Phase 5-2 建立 |
+> | `/run/media/root/D/deploy/python_env/` | 離線安裝素材（wheel、rpm、ODBC 驅動） | 部署包解開就在這裡 |
+> | `/run/media/root/D/data/` | 落地檔工作目錄 | Phase 0-11 建立 |
 >
-> 詳見 Phase 5。
+> 詳見 Phase 5 與 [`deploy_package_vm1/README.md`](./deploy_package_vm1/README.md)。
 
 > 📌 **`deploy` 上面那一層是磁碟掛載點，會因機器而異。**
 > VM1 / VM3 / VM5 是同一批申請的，資料碟都掛在 `/run/media/root/D`；
@@ -201,17 +219,17 @@ docker compose up -d <服務名>
 > **VM1 跳過這一節。** VM1 不跑容器，不需要 Docker。
 > VM1 從 [0-3](#0-3-安裝作業系統套件) 開始做。
 
-請先將安裝檔傳入正式環境，以進行離線安裝，確定以下四種檔案（請自行帶入欲安裝的版本號）已在正式環境。
+四個 rpm 就在**自己那台的部署包**裡：`os_packages/docker/`。
 以下指令都需要 root 權限（直接用 root 或每行加 `sudo`）。
 
 ```bash
-# RHEL 9+
-dnf localinstall \
-containerd.io-*.*.*-*.el9.x86_64.rpm \
-docker-ce-cli-*.*.*-*.el9.x86_64.rpm \
-docker-ce-*.*.*-*.el9.x86_64.rpm \
-docker-compose-plugin-*.*.*-*.el9.x86_64.rpm
+# RHEL 9+，在部署根目錄執行
+cd <部署根目錄>
+dnf localinstall -y ./os_packages/docker/*.rpm
 ```
+
+裝的是這四個（版本號以包裡實際的為準）：
+`containerd.io`、`docker-ce-cli`、`docker-ce`、`docker-compose-plugin`。
 
 以此方式驗證成功:
 ```bash
@@ -268,15 +286,14 @@ dnf install -y acl rsync openssh-clients policycoreutils-python-utils rsyslog ta
 
 **VM1 額外要裝 Python 3.11**（BCP Pipeline 的腳本跑在 host 上，不在容器裡）：
 
-```bash
-# 離線安裝（版本號自行帶入）
-dnf localinstall \
-  python3.11-*.el9.x86_64.rpm \
-  python3.11-libs-*.el9.x86_64.rpm \
-  python3.11-pip-*.el9.noarch.rpm \
-  python3.11-setuptools-*.el9.noarch.rpm
+rpm 就在 VM1 部署包的 `python_env/py/` 裡：
 
-# 連得到 repo 的話
+```bash
+# 在 VM1，離線安裝
+cd /run/media/root/D/deploy
+dnf localinstall -y ./python_env/py/*.rpm
+
+# 連得到內部 repo 的話，也可以直接裝
 dnf install -y python3.11 python3.11-pip
 ```
 
@@ -294,12 +311,22 @@ python3.11 -m venv --help > /dev/null && echo "venv OK"
 > Phase 2-2 解析 Keycloak token 時會用到 `python3`，那是 RHEL 9 內建的
 > `/usr/bin/python3`（3.9），不需要另外安裝。
 
-**VM1 還需要 SQL Server 的 ODBC 驅動**（`pyodbc` 要連 MS SQL Server 用）：
+**VM1 還需要 SQL Server 的 ODBC 驅動與 `bcp` 工具**
+（`pyodbc` 要連 MS SQL Server 用，`bcp_remote.py` 要用 `bcp`）：
 
 ```bash
-dnf localinstall msodbcsql18-*.rpm unixODBC-*.rpm
+# 在 VM1，rpm 在部署包的 python_env/bcp/
+cd /run/media/root/D/deploy/python_env/bcp
+ACCEPT_EULA=Y dnf localinstall -y ./*.rpm
+
 odbcinst -q -d      # 應列出 [ODBC Driver 18 for SQL Server]
+
+# bcp 裝在 /opt/mssql-tools18/bin，要加進 PATH
+echo 'export PATH="$PATH:/opt/mssql-tools18/bin"' >> /home/bcp_runner/.bashrc
 ```
+
+> `ACCEPT_EULA=Y` 不能省，`msodbcsql18` / `mssql-tools18` 沒有它會安裝失敗。
+> 更詳細的說明見 [`deploy_package_vm1/python_env/README.md`](./deploy_package_vm1/python_env/README.md)。
 
 ### 0-4. 時間同步（chrony）★四台 VM 都要做，含 VM1★
 
@@ -429,30 +456,57 @@ tar -xzf /tmp/deploy_package_vm4.tar.gz -C /data/deploy --strip-components=1
 ```bash
 mkdir -p /run/media/root/D/deploy
 tar -xzf /tmp/deploy_package_vm1.tar.gz -C /run/media/root/D/deploy --strip-components=1
-
-# 解開後應該看到：python_env/（wheel 與 rpm）、workspace/（rsyslog 設定等）、certs/
-ls -la /run/media/root/D/deploy
 ```
 
-**解開後確認結構正確：**
+**解開後確認結構正確**（每個包的第一層應該長這樣）：
+
 ```bash
 cd <部署根目錄>
-ls -la          # 應該看到 docker-compose.yml、.env、certs/、workspace/
+ls -A
 ```
 
-### 0-6. 更新各 VM 的 IP 設定
+| VM | 應該看到 |
+|---|---|
+| VM1 | `README.md` `certs/` `cicd_template/` `python_env/` `scripts/` `workspace/` |
+| VM3 | `README.md` `docker-compose.yml` `.env.example` `certs/` `security/` `os_packages/` `dockerfile/` `workspace/` `gitlab_workspace/` `cicd_template/` |
+| VM4 | `README.md` `docker-compose.yml` `.env.example` `certs/` `security/` `os_packages/` `workspace/` |
+| VM5 | `README.md` `docker-compose.yml` `.env.example` `certs/` `security/` `os_packages/` `workspace/` |
 
-**可以用指令或是 vim/nano 直接進去改**\
-**每台 VM 上，將 `.env` 裡的 IP 換成正式環境實際 IP：**
+**先讀一次包裡那份 `README.md`**，它寫的是「這個包的每一樣東西要去哪裡」，
+比下面的流程更貼近你手上實際看到的檔案。
+
+### 0-6. 建立 `.env` 並填入實際值（**VM3 / VM4 / VM5**）
+
+包裡附的是 `.env.example`（範本），**不會被 `docker compose` 讀到**。
+每台 VM 都要先複製成 `.env` 再填：
 
 ```bash
 # VM3 / VM4 / VM5 在自己的部署根目錄執行，指令完全相同
 cd <部署根目錄>
 
-sed -i "s/VM3_IP=.*/VM3_IP=<VM3實際IP>/" .env
-sed -i "s/VM4_IP=.*/VM4_IP=<VM4實際IP>/" .env
-sed -i "s/VM5_IP=.*/VM5_IP=<VM5實際IP>/" .env
+cp .env.example .env
+vim .env            # 範本裡每一項都有註解，照著填
+chmod 600 .env      # 裡面全部都是密碼
 ```
+
+**至少要改掉的三類值**（範本裡填的都是佔位值，直接上線等於沒設密碼）：
+
+| 類別 | 變數 | 說明 |
+|---|---|---|
+| IP | `VM3_IP` / `VM4_IP` / `VM5_IP` | 換成正式環境實際 IP |
+| 路徑 | `TLS_CERT_LOCAL_PATH`、`GITLAB_HOME`、`NGINX_*_CONFIG_DIR`、`DAGSTER_*` | 都要是**部署根目錄底下的絕對路徑**，掛載點跟著機器變 |
+| 密碼 / secret | `*_PASSWORD`、`*_SECRET`、`*_TOKEN` | 用 `python3 -c 'import secrets; print(secrets.token_urlsafe(32))'` 產生 |
+
+> ⚠️ **三台的 `.env` 之間有對得起來的值，不能各填各的：**
+>
+> | 值 | VM3 | VM4 | VM5 |
+> |---|---|---|---|
+> | `INFRA_DB_PORT` | 5433 | 5433 | 5433 |
+> | 資料庫帳密 | `DTRACK_DB_*` | ← 要跟 `workspace/init-infra-db.sql` 建的一致 → | `KEYCLOAK_DB_*`、`SUPERSET_DB_*` |
+> | OIDC secret | `GITLAB_OIDC_CLIENT_SECRET` | `DAGSTER_OIDC_CLIENT_SECRET` | `SUPERSET_OIDC_CLIENT_SECRET` |
+>
+> OIDC 那一排還要再跟 **Phase 2-2 建立 Keycloak client 時填的 secret** 一致，
+> 三個地方（Keycloak、`.env`、服務設定）對不起來就會登入失敗。
 
 > **VM1 沒有這個 `.env`。** 它的連線資訊在 `/home/bcp_runner/.env`，
 > 在 Phase 5-4 才建立。
@@ -460,6 +514,7 @@ sed -i "s/VM5_IP=.*/VM5_IP=<VM5實際IP>/" .env
 改完確認：
 ```bash
 grep -E '^VM[0-9]_IP=' .env
+grep -c 'ChangeMe' .env      # 應該是 0，還有 ChangeMe 就是有漏填的
 ```
 
 ### 0-7. 確認 compose 檔可以正確解析（**VM3 / VM4 / VM5**）
@@ -499,20 +554,19 @@ docker compose config | grep -E 'source:|device:'
 
 ### 0-9. 準備 TLS 憑證
 
-憑證放在部署根目錄的 `certs/` 底下（**四台 VM 都要有**，各服務都需要驗證彼此的 TLS；
-VM1 沒有容器，但 host 仍要信任這張 CA 才連得上 GitLab 等服務）：
+憑證已經放在各包的 `certs/` 底下，但**四台拿到的不一樣**——
+只有對外提供 HTTPS 的那兩台才有私鑰：
 
-```
-<部署根目錄>/certs/
-  GRCA3.crt                     # CA 根憑證
-  GCA3.crt                      # 中繼憑證
-  dai_202606.crt                # Domain 憑證
-  dai_202606.key                # 私鑰
-  fullcert_202606.crt           # 憑證鏈
-  gitlab.dai.post.gov.tw.crt    # 給 GitLab Runner 用（內容同憑證鏈，見 Phase 3-5）
-```
+| 檔案 | VM1 | VM3 | VM4 | VM5 | 用途 |
+|---|---|---|---|---|---|
+| `GRCA3.crt` | ✅ | ✅ | ✅ | ✅ | CA 根憑證，四台都要放進 host 信任清單 |
+| `GCA3.crt` | ✅ | ✅ | ✅ | ✅ | 中繼憑證 |
+| `dai_202606.crt` | — | ✅ | — | ✅ | Domain 憑證 |
+| `dai_202606.key` | — | ✅ | — | ✅ | **私鑰**，只給終結 TLS 的機器 |
+| `fullcert_202606.crt` | — | ✅ | — | ✅ | 憑證鏈，nginx 用 |
+| `gitlab.dai.post.gov.tw.crt` | — | ✅ | — | — | 給 GitLab Runner 用（內容同憑證鏈，見 Phase 3-5） |
 
-憑證鏈的組法（**順序不能反**：伺服器憑證 → 中繼 → 根）：
+憑證鏈的組法（**順序不能反**：伺服器憑證 → 中繼 → 根，只有 VM3／VM5 需要）：
 ```bash
 cd <部署根目錄>/certs
 cat dai_202606.crt GCA3.crt GRCA3.crt > fullcert_202606.crt
@@ -523,10 +577,10 @@ cat dai_202606.crt GCA3.crt GRCA3.crt > fullcert_202606.crt
 > `.env` 的 `TLS_CERT_LOCAL_PATH`、`certs/` 底下的檔名、nginx 設定、
 > 以及 `certs/gitlab.dai.post.gov.tw.crt`（Phase 3-5）。
 
-**私鑰權限要收緊**（不收的話 nginx 可能拒絕載入）：
+**私鑰權限要收緊**（不收的話 nginx 可能拒絕載入；VM1／VM4 沒有私鑰，跳過第一行）：
 ```bash
 chmod 600 dai_202606.key
-chmod 644 GRCA3.crt GCA3.crt dai_202606.crt fullcert_202606.crt gitlab.dai.post.gov.tw.crt
+chmod 644 *.crt
 ```
 
 憑證準備好之後，要把 CA 根憑證放進 VM 的信任清單裡面（**四台 VM 都要做**；
@@ -554,10 +608,14 @@ curl -I https://gitlab.dai.post.gov.tw/users/sign_in    # Phase 3 起來後不�
 # 在 VM4 執行
 cd /data/deploy
 chown -R 10001:10001 ./workspace/dagster_workspace
-chown -R 10001:10001 ./workspace/dagster_home
+chown -R 10001:10001 ./workspace/dagster_data
 ```
 
-> 實際目錄名以 `.env` 裡的路徑變數為準，先用 `grep -i dagster .env` 確認。
+> `dagster_home/` 在 `workspace/dagster_workspace/` **底下**（容器內是
+> `/app/workspace/dagster_home`），上面第一行已經連它一起 chown 了，不用另外處理。
+>
+> 這兩個目錄就是 `.env` 的 `DAGSTER_WORKSPACE` 與 `DAGSTER_DATA_DIR`，
+> 先用 `grep -i dagster .env` 確認實際路徑再執行。
 
 ### 0-11. BCP Pipeline 資料目錄（VM1）
 
@@ -609,12 +667,18 @@ docker compose up -d dagster-login dagster-code dagster-webserver dagster-daemon
 **驗證：**
 ```bash
 docker compose ps                                  # 五個服務都在，infra-db 是 (healthy)
-docker exec infra-db psql -U "$(grep '^INFRA_DB_USER=' .env | cut -d= -f2)" -c '\l'
-# 應列出 keycloak / dtrack / superset / dagster / keycloak_access_db
+docker exec infra-db psql -U "$(grep '^DB_USER=' .env | cut -d= -f2)" -c '\l'
+# 應列出 keycloak / keycloak_access_db / dtrack / superset_db / dagster
 ```
 
 **注意事項：**
-- `infra-db` 首次啟動時執行 `workspace/init-infra-db.sql`，會建立所有資料庫（keycloak、dtrack、superset、dagster、keycloak_access_db）。確保此 SQL 檔在啟動前已存在於正確路徑。**這個 SQL 只在資料目錄是空的時候會跑**，如果第一次啟動失敗，要先把 PostgreSQL 的資料目錄清掉再重來，否則改了 SQL 也不會生效。
+- `infra-db` 首次啟動時執行 `workspace/init-infra-db.sql`，會建立所有資料庫（keycloak、keycloak_access_db、dtrack、superset_db、dagster）與各自的帳號。**這個 SQL 只在資料目錄是空的時候會跑**，如果第一次啟動失敗，要先把資料清掉再重來，否則改了 SQL 也不會生效：
+  ```bash
+  docker compose down
+  docker volume rm "$(basename "$PWD")_infra-db-data"
+  docker compose up -d infra-db
+  ```
+- **`init-infra-db.sql` 裡的密碼要跟 VM3／VM5 的 `.env` 一致**（`DTRACK_DB_*`、`KEYCLOAK_DB_*`、`SUPERSET_DB_*`）。對不起來的話 Phase 2／Phase 3 的服務會連不上資料庫，而且錯誤訊息只會說 authentication failed，很難聯想到這裡。
 - `dagster-code` 必須先 healthy，`dagster-webserver` 和 `dagster-daemon` 才能啟動（compose 已設定 `depends_on` 健康依賴）。
 - `dagster-login`（OAuth2 Proxy，Dagster SSO 對外邊界）會持續重試連線 Keycloak，直到 Phase 2 的 Keycloak 啟動後才會轉為正常狀態，屬預期行為，不需要特別處理。
 - CD runner 已改到 VM3（跟 CI runner 同一台，見 Phase 3-5），VM4 不再需要 `gitlab-runner-cd`。改用 rsync 從 VM3 推送，VM4 只當接收端，上面不會有 `.git` 目錄、也不需要對 GitLab 的連線。理由見 [11_CD_rsync部署機制 · 第 8 節](./docs/GitLab維運手冊/進階調整/11_CD_rsync部署機制.md#8-為什麼是vm3-推而不是vm4-拉)。
@@ -1335,17 +1399,63 @@ GitLab UI → New project → Blank project（**不要**勾 Initialize with READ
 - `dagster-workspace`
 - `bcp-scripts`
 
-**推上初始程式碼**（在**你自己的電腦**上做，不是在 VM 上）：
+#### 兩個 repo 的初始內容從哪裡來
+
+| repo | 程式碼來源 | CI/CD 素材來源 |
+|---|---|---|
+| `dagster-workspace` | **VM4** 包裡的 `workspace/dagster_workspace/` | **VM3** 包裡的 `cicd_template/`，profile 用 `dagster-workspace` |
+| `bcp-scripts` | **VM1** 上的 `/home/bcp_runner/scripts/` | **VM1** 包裡的 `cicd_template/`，profile 用 `bcp-scripts` |
+
+「CI/CD 素材」指的是 `ci/` 腳本與 `.gitlab-ci.yml`、`.gitleaks.toml`、`.flake8`、
+`pyproject.toml`、`deploy_exclude.txt` 這幾個**必須放在 repo 根目錄**的檔案。
+一律用 `install.sh` 複製，不要手動 `cp`。
+
+**① `dagster-workspace`**（在 **VM3** 上做，或把兩邊的東西抓到自己電腦上做）：
 
 ```bash
-# dagster-workspace：本 repo 就是它
-cd <你本機的 dagster-workspace 目錄>
+mkdir -p ~/dagster-workspace-init && cd ~/dagster-workspace-init
+
+# 程式碼（從 VM4 抓，或直接用手上那份原始碼）
+scp -r root@<VM4_IP>:/data/deploy/workspace/dagster_workspace ./dagster_workspace
+
+# CI/CD 素材 → 複製到 repo 根目錄
+git init -b main
+/run/media/root/D/deploy/cicd_template/install.sh . dagster-workspace --dry-run   # 先看
+/run/media/root/D/deploy/cicd_template/install.sh . dagster-workspace             # 再做
+
+ci/install_hooks.sh          # 先裝 hook，第一個 commit 就會被掃
+git add -A && git commit -m "chore: 初始化 dagster-workspace"
+
 git remote add origin https://gitlab.dai.post.gov.tw/<group>/dagster-workspace.git
 git push -u origin main
-
-# bcp-scripts：從 VM1 現有的檔案初始化
-# 步驟見 docs/GitLab維運手冊/附錄/B_bcp-scripts_repo建立步驟.md
 ```
+
+**② `bcp-scripts`**（在 **VM1** 上做，程式碼就在那台機器上）：
+
+```bash
+# 在 VM1，用你自己的帳號（不是 bcp_runner）
+mkdir -p ~/bcp-scripts-init && cd ~/bcp-scripts-init
+
+# 程式碼：這個 repo 的根目錄本身就是 scripts/ 的內容（SOURCE_DIR="."）
+cp -r /home/bcp_runner/scripts/* .
+
+# CI/CD 素材 → 複製到 repo 根目錄
+git init -b main
+/run/media/root/D/deploy/cicd_template/install.sh . bcp-scripts --dry-run
+/run/media/root/D/deploy/cicd_template/install.sh . bcp-scripts
+
+# ★★★ 最重要的一步：確認沒有把機密帶進來 ★★★
+find . -name '.env' -o -name '*.key' -o -name '*.pem'
+# 有東西跑出來就先刪掉，那些永遠不進版控
+
+ci/install_hooks.sh
+git add -A && git commit -m "chore: 從 VM1 現有腳本初始化 repo"
+
+git remote add origin https://gitlab.dai.post.gov.tw/<group>/bcp-scripts.git
+git push -u origin main
+```
+
+完整說明見 [附錄 B · bcp-scripts repo 建立步驟](./docs/GitLab維運手冊/附錄/B_bcp-scripts_repo建立步驟.md)。
 
 > **這一步一定要排在 4E（分支保護）之前。**
 > 4E 會把 `main` 設成「Allowed to push and merge = No one」，
@@ -1374,15 +1484,23 @@ CI 的 secret-scanning job 則是**東西已經推上 GitLab 之後**才跑的�
 pre-receive hook 跑在 GitLab 主機上，利用 git 的 quarantine 機制：
 **回傳非 0 → 整批物件直接丟棄、ref 不動，金鑰從頭到尾沒進過 repo。**
 
-兩個要送進容器的檔案（`.gitleaks.toml` 與 `server_hooks/pre-receive`）都在
-`deploy_package_vm3.tar.gz` 解開後的目錄裡：
+兩個要送進容器的檔案都在 `deploy_package_vm3.tar.gz` 解開後的目錄裡，
+但**不在同一個資料夾**：
+
+| 檔案 | 在包裡的路徑 |
+|---|---|
+| `.gitleaks.toml`（規則檔） | `cicd_template/common/.gitleaks.toml` |
+| `pre-receive`（hook 本體） | `gitlab_workspace/server_hooks/pre-receive` |
+
+規則檔放在 `cicd_template/` 是刻意的：**本機 hook、伺服器 hook、CI 三邊用的是同一份規則**，
+所以它跟著 CI/CD 素材一起維護，這裡送進容器的只是「repo 沒帶自己的 `.gitleaks.toml` 時」的 fallback。
 
 ```bash
 # 在 VM3，cd 到部署根目錄（gitleaks 已在 Phase 3-6 裝好）
 cd /run/media/root/D/deploy
 
 # 預設規則檔（repo 沒帶 .gitleaks.toml 時的 fallback）
-docker cp ./gitlab_workspace/.gitleaks.toml gitlab:/etc/gitlab/gitleaks.toml
+docker cp ./cicd_template/common/.gitleaks.toml gitlab:/etc/gitlab/gitleaks.toml
 
 docker exec gitlab mkdir -p /var/opt/gitlab/gitaly/custom_hooks/pre-receive.d
 docker cp ./gitlab_workspace/server_hooks/pre-receive \
@@ -1396,9 +1514,10 @@ docker exec gitlab ls -l /usr/local/bin/gitleaks \
                           /var/opt/gitlab/gitaly/custom_hooks/pre-receive.d/10-gitleaks
 ```
 
-> ⚠️ `.gitleaks.toml` 在 repo 根目錄，打包 VM3 部署包時要記得把它一起帶進
-> `gitlab_workspace/` 底下（或自行調整上面的來源路徑）。
-> 這份是 **fallback**：repo 自己帶了 `.gitleaks.toml` 時以 repo 的為準。
+> ⚠️ 這份是 **fallback**：repo 自己帶了 `.gitleaks.toml` 時以 repo 的為準。
+> 改規則的時候改的是 `cicd_template/common/.gitleaks.toml`，
+> 改完要做兩件事：**重新 `docker cp` 一次**（更新 fallback），
+> 以及對兩個 repo 各跑一次 `install.sh`（更新 repo 裡那份）。
 
 放在 `custom_hooks/pre-receive.d/` 底下是**全域** hook，所有專案自動生效。
 
@@ -1621,7 +1740,7 @@ Settings → CI/CD → Variables → Add variable
 > 私鑰是多行的，**一定要用 File 型別**，Variable 型別會壞掉且無法 mask。
 >
 > **`DEPLOY_PATH`、`SOURCE_DIR`、`POST_DEPLOY_CMD` 不用在這裡設**，
-> 它們寫死在 [`.gitlab-ci.yml`](./cicd_template/dagster-workspace/.gitlab-ci.yml) 的 job 裡（每個 repo、每個環境各自不同），
+> 它們寫死在 [`.gitlab-ci.yml`](./deploy_package_vm3/cicd_template/dagster-workspace/.gitlab-ci.yml) 的 job 裡（每個 repo、每個環境各自不同），
 > 在這裡重設反而會蓋掉。
 >
 > **資料庫密碼不在這裡，也不該在這裡。** DB 連線走各機器上的 `.env`
@@ -1730,7 +1849,7 @@ ls -l /data/deploy/workspace/dagster_workspace/dbt_project/profiles.yml
 ```
 
 這兩個檔案是 4C 之前人工建立的、不進版控，能在 `rsync --delete` 之下活下來
-靠的是 [`deploy_exclude.txt`](./cicd_template/dagster-workspace/deploy_exclude.txt)：
+靠的是 [`deploy_exclude.txt`](./deploy_package_vm3/cicd_template/dagster-workspace/deploy_exclude.txt)：
 
 > **rsync 的 `--delete` 不會刪掉被 `--exclude` 排除的檔案**
 > （會刪的是 `--delete-excluded`，我們刻意不用）。
@@ -1912,7 +2031,7 @@ GitLab UI → Run pipeline（main）→ 看 sca-dtrack job 的 log
 1. 點 job log 裡的 D-Track 連結，看是哪個套件、哪個 CVE
 2. 看 **Fixed in** 有沒有修補版本
 3. 有的話改 `requirements.txt` → MR → 合併
-   （**離線環境記得先把新版 wheel 帶進 `/run/media/root/D/python_env/req/`**）
+   （**離線環境記得先把新版 wheel 帶進 `/run/media/root/D/deploy/python_env/req/`**）
 4. 沒有修補版本、或確認我們沒用到那個弱點路徑 →
    在 D-Track 標記 `Not Affected` 並**在 Details 寫清楚理由**
 
@@ -2062,11 +2181,26 @@ python3.11 -m venv /run/media/root/D/python_env/dai_venv
 source /run/media/root/D/python_env/dai_venv/bin/activate
 ```
 
-離線安裝套件（`--no-index` 確保不會去外網找）
+離線安裝套件（`--no-index` 確保不會去外網找）。
+**wheel 在部署包解開的地方，不在 venv 那一層**：
+
 ```bash
-python -m pip install --no-index \
-  --find-links=/run/media/root/D/python_env/req/ \
-  /run/media/root/D/python_env/req/*.whl
+# wheel 的位置：<VM1 部署根目錄>/python_env/req/
+WHEELS=/run/media/root/D/deploy/python_env/req
+
+python -m pip install --no-index --find-links="$WHEELS" -r "$WHEELS/requirements.txt"
+```
+
+> 兩個 `python_env` 不是同一個目錄，不要搞混：
+>
+> | 路徑 | 是什麼 |
+> |---|---|
+> | `/run/media/root/D/deploy/python_env/` | **部署包解開的素材**（wheel、rpm），裝完就不再變動 |
+> | `/run/media/root/D/python_env/dai_venv/` | **真正在跑的 venv**，Dagster 叫起來的腳本吃的是這個 |
+
+裝完確認 17 個套件都在：
+```bash
+python -m pip list --format=freeze | wc -l      # 應該是 17（不含 pip/setuptools/wheel）
 ```
 
 > 啟動 venv 之後用 `python -m pip`，不要用 `pip3.11`。
@@ -2312,8 +2446,14 @@ sudo cp ./workspace/rsyslog/vm4-server.conf \
 sudo cp ./workspace/rsyslog/vm4-integrity-forward.conf \
   /etc/rsyslog.d/25-dai-integrity-fwd.conf
 
+# 轉發雜湊 manifest 到 VM1，要填 VM1 的實際 IP
+sudo sed -i "s/__VM1_IP__/<VM1實際IP>/g" /etc/rsyslog.d/25-dai-integrity-fwd.conf
+
 # 驗證語法後重啟
 sudo rsyslogd -N1 && sudo systemctl restart rsyslog
+
+# 確認佔位字串都換掉了（沒有輸出才對）
+grep -rn '__VM._IP__' /etc/rsyslog.d/
 ```
 
 **VM1 / VM3 / VM5（轉發端）：**
@@ -2327,12 +2467,15 @@ mount --bind /run/media/root/D/log/dai /var/log/dai
 # 綁定之後下這條指令，系統就會對這個路徑貼上合法的 log 標籤
 restorecon -Rv /var/log/dai
 
-# 複製設定並替換 VM4 IP（若需要）
+# 複製設定並填入 VM4 的實際 IP
 sudo cp ./workspace/rsyslog/dai_client.conf \
   /etc/rsyslog.d/20-dai-client.conf
-sudo sed -i "s/10.28.155.40/<VM4實際IP>/g" /etc/rsyslog.d/20-dai-client.conf
+sudo sed -i "s/__VM4_IP__/<VM4實際IP>/g" /etc/rsyslog.d/20-dai-client.conf
 
 sudo rsyslogd -N1 && sudo systemctl restart rsyslog
+
+# 確認佔位字串換掉了（沒有輸出才對）
+grep -n '__VM4_IP__' /etc/rsyslog.d/20-dai-client.conf
 ```
 
 > ⚠️ **`mount --bind` 重開機後會消失。** 要寫進 `/etc/fstab` 才會自動掛回來：
@@ -2369,8 +2512,16 @@ sudo chmod 750 /var/log/dai-integrity
 
 sudo cp /run/media/root/D/deploy/workspace/rsyslog/vm1-integrity-server.conf \
   /etc/rsyslog.d/10-dai-integrity-server.conf
+# 這份會比對來源 IP，只收 VM4 送來的訊息，所以要填 VM4 的實際 IP
+sudo sed -i "s/__VM4_IP__/<VM4實際IP>/g" /etc/rsyslog.d/10-dai-integrity-server.conf
+
 sudo rsyslogd -N1 && sudo systemctl restart rsyslog
 ```
+
+> ⚠️ VM1 上會有**兩份** rsyslog 設定，兩份都要裝：
+> `20-dai-client.conf`（VM1 自己的 log 送去 VM4）與
+> `10-dai-integrity-server.conf`（收 VM4 送來的雜湊 manifest）。
+> 前者在上面「VM1 / VM3 / VM5（轉發端）」那一段。
 
 > VM1 這一段**不需要**綁定 `/var/log/gitlab`——GitLab 不在 VM1 上。
 > 它只是收 VM4 轉發過來的 manifest。
@@ -2463,13 +2614,13 @@ sudo restorecon -Rv /data/log/dai/
 | Superset | `https://superset.dai.post.gov.tw` | 302 跳轉至 Keycloak 登入 |
 | nginx VM3 | `https://gitlab.dai.post.gov.tw/healthz` | `ok` |
 | nginx VM5 | `https://auth.dai.post.gov.tw/healthz` | `ok` |
-| infra-db | `docker exec infra-db pg_isready -U $INFRA_DB_USER` | `accepting connections` |
+| infra-db | `docker exec infra-db pg_isready -U $DB_USER` | `accepting connections` |
 
 ---
 
 ## 已知 Image / Compose 修正（已內建，部署時不需要再處理，僅供了解原因）
 
-下列問題已在 `dockerfile/` 與 `docker-compose/*_secure.yml` 中修正，若日後升級 image 版本或重新調整 secure compose，建議留意同樣的坑：
+下列問題已在 `dockerfile/` 與各包的 `docker-compose.yml`（security-hardened 版本） 中修正，若日後升級 image 版本或重新調整 secure compose，建議留意同樣的坑：
 
 | 問題 | 根因 | 修正位置 |
 |------|------|---------|

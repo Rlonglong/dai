@@ -1,0 +1,24 @@
+[flake8]
+max-line-length = 120
+
+# E203 / W503：與 black 的換行風格衝突，官方建議關掉
+# E501 由 max-line-length 控制，這裡不額外放行
+extend-ignore = E203, W503
+
+exclude =
+    .git,
+    .venv,
+    venv,
+    __pycache__,
+    docs,
+    dagster_workspace/dbt_project/target,
+    dagster_workspace/dbt_project/dbt_packages,
+    dagster_workspace/dbt_project/logs
+
+# Dagster 的 Definitions 入口檔會 re-export 一堆名稱給 dagster 自己載入，
+# 這些 import 在檔案裡看起來「沒被用到」但不能刪。
+per-file-ignores =
+    dagster_workspace/dagster_code/__init__.py:F401,F811
+    */__init__.py:F401
+
+max-complexity = 20

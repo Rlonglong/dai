@@ -25,7 +25,7 @@ python_env/
 ## 為什麼選 Python 3.11 而不是自行編譯 3.10？
 
 - RHEL 9 / UBI 9 官方倉庫（AppStream）本身就有 `python3.11`（3.11.13）套件，可直接用 `dnf download` 抓 RPM，**不需要在目標機上編譯**，也沒有原本用原始碼編譯 3.10 時遇到的 `readline-devel`（RHEL9 因 GPLv3 授權問題未提供）需要用 libedit 補救的問題。
-- 已驗證 `dai/bcp_pipeline:v1.2` 的 `requirements.txt`（13 個套件、版本皆未變動）在 cp311 上**全部都有對應的 manylinux wheel**，可直接離線安裝，不需要改版本、也不需要在目標機上編譯任何 C 擴充套件。
+- 已驗證 `req/requirements.txt`（17 個套件、版本皆未變動）在 cp311 上**全部都有對應的 manylinux wheel**，可直接離線安裝，不需要改版本、也不需要在目標機上編譯任何 C 擴充套件。
 - `bcp` / `msodbcsql18` 是獨立的原生工具，與 Python 版本無關，兩者可任意搭配。
 
 已在乾淨的 UBI9 容器中做過端對端驗證：安裝 python3.11 RPM → 安裝 bcp RPM → 用 whl 離線安裝 requirements.txt → import 全部套件成功 → `pyodbc.drivers()` 可看到 `ODBC Driver 18 for SQL Server` → `bcp -v` 正常執行。
@@ -69,23 +69,37 @@ python3.11 -m pip --version
 
 ## Part 2：安裝 dai/bcp_pipeline:v1.2 所需的 Python 套件
 
-`req/requirements.txt` 直接取自 `dai/bcp_pipeline:v1.2` 映像的 `/app/requirements_bcp_pipeline.txt`，**版本未做任何修改**（皆已確認有 cp311 對應 wheel）：
+`req/requirements.txt` 以 `dai/bcp_pipeline:v1.2` 映像的
+`/app/requirements_bcp_pipeline.txt` 為底，**版本未做任何修改**，
+再補上 VM1 腳本實際會 import、但原映像清單沒列到的四個
+（`pymssql`、`openpyxl`、`python-dotenv`、`et_xmlfile`）。
+共 **17 個套件**，全部都已確認有 cp311 對應 wheel：
 
 ```
 cffi==2.0.0
 cryptography==49.0.0
 dagster-pipes==1.13.11
+et_xmlfile==2.0.0
 numpy==2.2.6
+openpyxl==3.1.5
 packaging==26.2
 pandas==2.3.3
 pycparser==3.0
+pymssql==2.3.11
 pyodbc==5.3.0
 python-dateutil==2.9.0.post0
+python-dotenv==1.2.2
 pytz==2026.2
 six==1.17.0
 typing_extensions==4.15.0
 tzdata==2026.2
 ```
+
+> ⚠️ 這份清單要跟 `bcp-scripts` repo 根目錄的 `requirements.txt`
+> **保持一致**（那一份是 D-Track 弱掃的依據）。
+> 兩邊不一致的話，掃的是紙上的環境而不是真正在跑的環境，見部署手冊 Phase 4I。
+>
+> `req/` 底下的 `.whl` 檔數量必須跟這份清單一樣多，少一個就會離線安裝失敗。
 
 `req/*.whl` 是對應 **cp311 + manylinux（RHEL9 相容）+ x86_64** 的 wheel 檔，已下載齊全，無需連網也不需要編譯（`cryptography`、`numpy`、`pandas`、`pyodbc`、`cffi` 等含 C 擴充套件的套件都已是預編譯好的 wheel）。
 

@@ -1,0 +1,322 @@
+services:
+  # ----------------------------------------
+  # 1. 邊界逆向代理閘道器 (Nginx)
+  # ----------------------------------------
+  nginx:
+    image: dai/nginx:v1.0
+    container_name: nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ${NGINX_CONFIG_DIR}:/etc/nginx/conf.d:ro
+      - ${TLS_CERT_LOCAL_PATH}:/etc/nginx/ssl:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/healthz | grep -q ok || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    logging:
+      driver: "syslog"
+      options:
+        tag: "nexflow/nginx"
+    extra_hosts:
+      # 將其他網域指向對應 VM (Nginx proxy_pass 設定要對應這些 host)
+      - "dagster.dai.post.gov.tw:${VM4_IP}"
+      - "dagster-login:${VM4_IP}"
+      - "dtrack.dai.post.gov.tw:${VM3_IP}"
+      - "gitlab.dai.post.gov.tw:${VM3_IP}"
+    networks:
+      vm5-network:
+        aliases:
+          - auth.dai.post.gov.tw
+          - superset.dai.post.gov.tw
+          
+  # ----------------------------------------
+  # 2.1 身分驗證與 SSO 中心 (Keycloak)
+  #     Security-hardened version
+  #     Base: docker-compose_vm5.yml
+  #     CVE reference: sast/report/keycloak_v2_vulner_report.md（OS Layer 48 條）
+  #                     secure_report/keycloak_secure_report.md
+  #     範圍說明：本檔目前涵蓋 dai/keycloak:v2.1（keycloak）與
+  #     dai/superset:v2.1（superset-init / superset，OS Layer HIGH 6 條，
+  #     見 secure_report/superset_secure_report.md）。kc_access 經查證無
+  #     弱點，沿用 docker-compose_vm5.yml 原設定原樣搬移（不新增任何
+  #     security_opt/cap_drop 等硬化欄位）。nginx 使用不同 image，不在本次
+  #     弱點防堵範圍內，沿用 docker-compose_vm5.yml 原設定。
+  # ----------------------------------------
+  keycloak:
+    image: dai/keycloak:v2.1
+    container_name: keycloak
+    restart: unless-stopped
+    command: ["start", "--http-enabled=true"]
+    env_file:
+      - .env
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://${VM4_IP}:${INFRA_DB_PORT}/${KEYCLOAK_DB_NAME}
+      KC_DB_USERNAME: ${KEYCLOAK_DB_USER}
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USER}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KC_PROXY_HEADERS: xforwarded
+      KC_HOSTNAME: https://auth.dai.post.gov.tw
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_LOG_MDC_ENABLED: "true"
+      KC_LOG_LEVEL: "INFO,org.keycloak.events:INFO,org.keycloak.audit:INFO"
+      KC_SPI_EVENTS_LISTENER_JBOSS_LOGGING_SUCCESS_LEVEL: "info"
+      KC_SPI_EVENTS_LISTENER_JBOSS_LOGGING_ERROR_LEVEL: "warn"
+      KC_HEALTH_ENABLED: "true"
+
+    # Dockerfile.keycloak 最終以 `USER 1000` 切換（ubi9-micro 慣例：任意 UID
+    # + GID 0，/opt/keycloak 下目錄皆為 group-writable），此處明確重申。
+    user: "1000:0"
+
+    # [CVE-2026-5435 / CVE-2026-6238 glibc DNS/TSIG 回應解析]
+    # 更新（2026-07-01）：原本假設 Keycloak 無任何合法對外 DNS 解析需求，
+    # 僅釘選 Docker 內嵌 resolver（127.0.0.11）。但此 realm 後續會設定
+    # LDAP User Federation 串接公司內部 LDAP（見 deploy_report.md「Keycloak
+    # LDAP 設定」），LDAP server 若以主機名稱（而非 IP 字面值）設定，
+    # Keycloak 需要能解析公司內部網域名稱，127.0.0.11 內嵌 resolver
+    # 預設只會轉發給 host dockerd 設定的上游 DNS（可能不是公司可信任
+    # DNS，視 host /etc/resolv.conf 而定），不保證能解析。
+    # 改為直接釘選公司可信任 DNS 伺服器（10.10.43.1 / 10.10.43.2），取代
+    # 內嵌 resolver。仍維持「明確釘選固定清單、不開放任意 DNS」的圍堵
+    # 原則，只是清單從 127.0.0.11 換成公司可信任 DNS，CVE-2026-5435 /
+    # 6238（glibc DNS/TSIG 回應解析弱點）的風險仍受限於只會跟這兩台
+    # 可信任伺服器交換 DNS 封包，不會被導向任意惡意 DNS。
+    dns:
+      - 10.10.43.1
+      - 10.10.43.2
+
+    # [CVE-2026-22020 等 java-21-openjdk-headless 內嵌 libpng/harfbuzz/lcms2
+    # 弱點、libgcc demangle、scanf/ungetwc 等] no-new-privileges 禁止容器內
+    # 任何程序透過 setuid/setgid 或 execve 提升權限；seccomp 為通用攻擊面
+    # 縮減 baseline。不使用 AppArmor/自訂 SELinux policy——RHEL 9 正式環境
+    # 下 Docker 預設即以 SELinux `container_t` type confine 容器（無需自行
+    # 撰寫 policy），本次 48 條 OS CVE 的檔案寫入層防線改由下方
+    # `read_only: true` root filesystem 涵蓋（詳見 secure_report 各節說明）。
+    security_opt:
+      - no-new-privileges:true
+      - seccomp:./security/seccomp-keycloak.json
+
+    # cap_drop ALL：Keycloak 僅監聽 8080（HTTP）/9000（health/metrics）
+    # 兩個非特權埠，無需任何 Linux capability。
+    cap_drop:
+      - ALL
+
+    # read_only root filesystem：即使 java-21-openjdk-headless 內嵌的
+    # libpng/harfbuzz/lcms2 原生程式碼被觸發寫入（本報告分析後判定可達性
+    # 極低），容器 overlay 根層本身不可寫，可寫範圍限縮在下方
+    # /opt/keycloak/data（具名 volume，非 tmpfs——Keycloak/Narayana 交易
+    # 紀錄需要可在容器重啟後保留，供當機復原）與 /tmp、/run（tmpfs）。
+    read_only: true
+    volumes:
+      - keycloak_data:/opt/keycloak/data
+    tmpfs:
+      - /tmp:size=128m,mode=1777,noexec,nosuid
+      - /run:size=16m,mode=0755,noexec,nosuid
+
+    # [scanf/ungetwc/zlib CRC32-combine 等 DoS 類弱點]
+    # 資源上限圍堵，避免任一弱點被觸發後造成記憶體/CPU 耗盡擴大影響範圍。
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          memory: 512M
+
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000; echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3; cat <&3 | grep -q 'UP'"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 90s
+    logging:
+      driver: "syslog"
+      options:
+        tag: "nexflow/keycloak"
+    networks:
+      - vm5-network
+
+  # ----------------------------------------
+  # 2.2 kc_access（沖洗中心 / access-controller）
+  #     查證結果：sast 掃描無弱點，原樣搬移，未新增任何硬化欄位。
+  # ----------------------------------------
+  kc_access:
+    image: dai/kc_access:v2.0
+    container_name: kc_access
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      TZ: Asia/Taipei
+    depends_on:
+      keycloak:
+        condition: service_started
+    logging:
+      driver: "syslog"
+      options:
+        tag: "nexflow/kc_access"
+    networks:
+      - vm5-network
+
+  # ----------------------------------------
+  # 3.1 Superset Init
+  #     Security-hardened version
+  #     CVE reference: sast/report/superset_v2_vulner_report.md（OS Layer HIGH 6 條）
+  #                     secure_report/superset_secure_report.md
+  # ----------------------------------------
+  superset-init:
+    image: dai/superset:v2.2
+    container_name: superset-init
+    env_file:
+      - .env
+    environment:
+      - DB_HOST=${VM4_IP}
+      - SUPERSET_CONFIG_PATH=/app/superset_config.py
+      # [CVE-2026-53614] 明確清除 LIBMOUNT_FORCE_MOUNT2，防止攻擊者透過此
+      # 環境變數繞過 mount(8) 的 nosuid/noexec 限制（同 bcp_pipeline 的
+      # docker-compose_vm1_secure.yml 既有做法）。env_file 的值優先，此處
+      # 確保即使 vm5.env 未來被覆寫也不會留下預設值。
+      - LIBMOUNT_FORCE_MOUNT2=
+    volumes:
+      - ./workspace/superset_config.py:/app/superset_config.py:ro,z
+      - ./workspace/custom_sso_security_manager.py:/app/custom_sso_security_manager.py:ro,z
+      - superset_home:/app/superset_home
+    networks:
+      - vm5-network
+    command: >
+      bash -c "
+      superset db upgrade &&
+      superset fab create-admin --username admin --firstname Superset --lastname Admin --email admin@superset.com --password admin || true &&
+      superset init
+      "
+
+    # Dockerfile.superset Step 5 已以 `USER superset`（UID/GID 1000）建立並
+    # 切換，此處明確重申。
+    user: "1000:1000"
+
+    # [CVE-2025-69720 ncurses 家族 / CVE-2026-11822、CVE-2026-11824 libsqlite3-0]
+    # no-new-privileges 禁止透過 setuid/setgid 或 execve 提升權限；seccomp
+    # 為通用攻擊面縮減 baseline。不使用 AppArmor/自訂 SELinux policy——RHEL 9
+    # 正式環境下 Docker 預設即以 SELinux `container_t` type confine 容器
+    # （無需自行撰寫 policy），本次 6 條 OS HIGH CVE 的檔案/TTY 層防線改由
+    # 下方 `read_only: true` root filesystem 涵蓋（詳見 secure_report 說明）。
+    security_opt:
+      - no-new-privileges:true
+      - seccomp:./security/seccomp-superset.json
+
+    # cap_drop ALL：superset-init 僅執行 DB migration / admin 帳號建立，
+    # 不需要任何 Linux capability。
+    cap_drop:
+      - ALL
+
+    # [CVE-2026-5435 / CVE-2026-6238 glibc DNS/TSIG 回應解析]
+    # 與 superset 主服務理由相同（見下方該服務的說明），SQL Lab 新增資料庫
+    # 連線功能需要解析任意外部主機名稱，無法比照 Keycloak 釘選固定清單，
+    # 改為限定只跟公司可信任 DNS 伺服器交換查詢，取代 host 預設（可能不可信）
+    # 的上游 DNS。
+    dns:
+      - 10.10.43.1
+      - 10.10.43.2
+
+    # read_only root filesystem：DATA_DIR（/app/superset_home）為唯一執行期
+    # 寫入路徑（db upgrade 過程的暫存狀態），以具名 volume 掛載（與下方
+    # superset 主服務共用同一個 volume，因兩者操作同一份 DATA_DIR 語意）。
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777,noexec,nosuid
+
+  # ----------------------------------------
+  # 3.2 Superset (BI Tool)
+  #     Security-hardened version（設定邏輯同 superset-init，見上方註解）
+  # ----------------------------------------
+  superset:
+    image: dai/superset:v2.2
+    container_name: superset
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - DB_HOST=${VM4_IP}
+      - SUPERSET_CONFIG_PATH=/app/superset_config.py
+      # [CVE-2026-27171 zlib CRC32 combine 無限迴圈 DoS]
+      # 已查證 zip 上傳（COLUMNAR_EXTENSIONS 含 "zip"，見
+      # superset/commands/database/uploaders/columnar_reader.py 的
+      # `from zipfile import ...`）會經 Python zipfile 呼叫 zlib 解壓縮，
+      # 是這個 CVE 在 Superset 內唯一已確認的可達路徑。run-server.sh 預設
+      # GUNICORN_TIMEOUT=60，worker 卡在無限迴圈會在 60 秒後被 gunicorn
+      # 強制終止；此處明確寫出該值（行為與不寫時的 image 預設相同），
+      # 避免日後稽核需要回頭翻 Dockerfile/run-server.sh 才能確認逾時設定。
+      - GUNICORN_TIMEOUT=60
+      # [CVE-2026-53614] 同 superset-init 上方說明。
+      - LIBMOUNT_FORCE_MOUNT2=
+    depends_on:
+      superset-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./workspace/superset_config.py:/app/superset_config.py:ro,z
+      - ./workspace/custom_sso_security_manager.py:/app/custom_sso_security_manager.py:ro,z
+      - superset_home:/app/superset_home
+
+    user: "1000:1000"
+
+    # 不使用 AppArmor/自訂 SELinux policy，理由同 superset-init 上方註解。
+    security_opt:
+      - no-new-privileges:true
+      - seccomp:./security/seccomp-superset.json
+    cap_drop:
+      - ALL
+
+    # [CVE-2026-5435 / CVE-2026-6238 glibc DNS/TSIG 回應解析]
+    # 已查證：與 Keycloak（[[secure_report/keycloak_secure_report.md]]）不同，
+    # Superset 的 SQL Lab／新增資料庫連線功能設計上就是要讓使用者填入任意
+    # 外部資料庫主機名稱並連線，無法比照 Keycloak 釘選固定 IP 清單（會直接
+    # 打斷正常功能）。改為限定容器只跟公司可信任 DNS 伺服器
+    # （10.10.43.1 / 10.10.43.2）交換查詢，取代未設定時 Docker 預設轉發給
+    # host `/etc/resolv.conf` 上游（可能是不可信的 DNS）的行為。OIDC 登入
+    # 呼叫的 auth.dai.post.gov.tw 本身經由 vm5-network 內 nginx 容器的
+    # network alias 由內嵌 resolver 解析，不會送出此查詢，本設定主要圍堵的
+    # 是 SQL Lab 資料庫連線情境下的外部 DNS 查詢風險面。
+    dns:
+      - 10.10.43.1
+      - 10.10.43.2
+
+    # read_only root fs：可寫範圍限縮在 /app/superset_home（DATA_DIR，具名
+    # volume）、/app/superset/static/uploads（CSV/Excel 上傳暫存區，tmpfs——
+    # 已查證 PREVENT_UNSAFE_DB_CONNECTIONS=True 為 Superset 自身預設值且
+    # 未被覆寫，上傳檔案經解析後寫入 PostgreSQL，不需要跨重啟保留原始檔）、
+    # /tmp（gunicorn/Flask 一般暫存）。
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777,noexec,nosuid
+      - /app/superset/static/uploads:size=128m,mode=1777,noexec,nosuid
+
+    # [scanf/terminfo/SQLite 等 DoS 與記憶體損壞類弱點]
+    # 資源上限圍堵，避免任一弱點被觸發後造成記憶體/CPU 耗盡擴大影響範圍。
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          memory: 512M
+
+    logging:
+      driver: "syslog"
+      options:
+        tag: "nexflow/superset"
+    networks:
+      - vm5-network
+
+volumes:
+  keycloak_data:
+  superset_home:
+
+networks:
+  vm5-network:
+    driver: bridge

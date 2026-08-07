@@ -38,7 +38,7 @@ GitLab → 左上 + → New project → Create blank project
 
 ## 3. 複製 CI/CD 素材
 
-素材集中在本 repo 的 [`cicd_template/`](../../../cicd_template/README.md)。
+素材集中在本 repo 的 [`cicd_template/`](../../../deploy_package_vm3/cicd_template/README.md)。
 
 ```bash
 # 在本 repo 底下
@@ -283,7 +283,7 @@ cd cicd_template
 
 ## 相關文件
 
-- 素材本身 → [`cicd_template/README.md`](../../../cicd_template/README.md)
+- 素材本身 → [`cicd_template/README.md`](../../../deploy_package_vm3/cicd_template/README.md)
 - `bcp-scripts` 當初怎麼建的 → [附錄 B](./B_bcp-scripts_repo建立步驟.md)
 - 分支保護與 Merge checks → [04_帳號_權限_分支保護](../日常維運/04_帳號_權限_分支保護.md)
 - pipeline 每個 job 在做什麼 → [10_CI_Pipeline設定詳解](../進階調整/10_CI_Pipeline設定詳解.md)

@@ -227,7 +227,7 @@ GitLab UI → CI/CD → Pipelines → 找到上一個好的 pipeline → `deploy
 因為這個差別，`bcp-scripts` 的 `deploy_exclude.txt` **必須**把
 `ci/`、`docs/`、`.gitlab-ci.yml`、`README.md` 排除掉，
 否則這些工具檔會被推到 VM1 上去。範本已經寫好了，見
-[`cicd_template/bcp-scripts/deploy_exclude.txt`](../../../cicd_template/bcp-scripts/deploy_exclude.txt)。
+[`cicd_template/bcp-scripts/deploy_exclude.txt`](../../../deploy_package_vm3/cicd_template/bcp-scripts/deploy_exclude.txt)。
 
 ---
 

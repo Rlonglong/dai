@@ -1,0 +1,305 @@
+# =============================================================================
+# DAI · dagster_workspace —— GitLab CI/CD
+# =============================================================================
+# 這條 pipeline 在做什麼：
+#
+#   任何分支 push / MR  →  lint + test + security      （品質與資安閘門）
+#   合併進 main         →  deploy（rsync 推到 VM4）+ 立刻驗雜湊
+#   每天 08:30 排程     →  verify（雜湊對帳）            SCHEDULE_TYPE=verify
+#   每季 1 號排程       →  完整資安複掃（gitleaks 全歷史 + bandit + D-Track）
+#                                                       SCHEDULE_TYPE=quarterly
+#
+# ★ 重要觀念：CI 不是防止金鑰外洩的地方 ★
+#   secret-scanning job 是在東西**已經推上 GitLab 之後**才跑的。
+#   真正的防護是「push 當下就擋掉」：
+#       ci/hooks/pre-push          本機（可被 --no-verify 繞過）
+#       gitlab_workspace/server_hooks/pre-receive VM3 伺服器端（繞不過，push 直接被拒）
+#   這裡的 job 是最後一道防線與稽核紀錄，不是第一道。
+#   安裝方式見 docs/GitLab維運手冊/進階調整/10_CI_Pipeline設定詳解.md
+#
+# 正式 / 測試環境怎麼分：見 docs/GitLab維運手冊/進階調整/13_Variables與環境隔離.md
+# =============================================================================
+
+variables:
+  GIT_STRATEGY: fetch
+  GIT_CLEAN_FLAGS: -ffdx
+  # 品質檢查要跟目標分支比 diff，淺複製會算不出共同祖先 → 一律取完整歷史
+  GIT_DEPTH: 0
+  # gitleaks 也需要完整歷史才掃得到 commit 範圍
+  DAI_LOG_TAG: "dai/gitlab-sync"
+  SOURCE_DIR: "dagster_workspace"
+
+stages:
+  - lint
+  - test
+  - security
+  - deploy
+  - verify
+
+default:
+  before_script:
+    - source ~/.venv/bin/activate || echo "沒有 ~/.venv，改用系統 Python"
+    - python --version
+    - chmod +x ci/*.sh ci/hooks/* 2>/dev/null || true
+  interruptible: true
+
+# -----------------------------------------------------------------------------
+# 共用規則
+# -----------------------------------------------------------------------------
+.rules_mr_and_push: &rules_mr_and_push
+  rules:
+    # MR pipeline 優先；避免同一個 commit 同時跑 branch pipeline 與 MR pipeline
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_OPEN_MERGE_REQUESTS == null
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# 排程有兩種，用 SCHEDULE_TYPE 這個變數區分，否則兩種排程會互相觸發對方的 job：
+#   SCHEDULE_TYPE=verify     每天 08:30  → 只跑雜湊對帳
+#   SCHEDULE_TYPE=quarterly  每季 1 號   → 跑完整資安複掃（不跑對帳、不跑部署）
+.rules_security: &rules_security
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_OPEN_MERGE_REQUESTS == null
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_TYPE == "quarterly"
+
+# =============================================================================
+# Stage: lint —— 只檢查這次動到的檔案（原因見 ci/lint.sh 開頭）
+# =============================================================================
+format-check:
+  stage: lint
+  tags: [vm3, ci]
+  script:
+    - ci/lint.sh format
+  <<: *rules_mr_and_push
+
+lint-check:
+  stage: lint
+  tags: [vm3, ci]
+  script:
+    - ci/lint.sh style
+  <<: *rules_mr_and_push
+
+sql-lint:
+  stage: lint
+  tags: [vm3, ci]
+  script:
+    - ci/lint.sh sql
+  <<: *rules_mr_and_push
+
+hooks-installed:
+  # 提醒用，不擋門：CI 檢查不了「開發者本機有沒有裝 hook」，
+  # 但可以在 MR 上留一個看得見的提示。真正的強制在伺服器端 pre-receive。
+  stage: lint
+  tags: [vm3, ci]
+  script:
+    - |
+      echo "本機 hook 是自願安裝的，CI 驗不到。"
+      echo "請每位開發者 clone 完執行一次： ci/install_hooks.sh"
+      echo "沒裝也沒關係 —— VM3 的 pre-receive hook 會在伺服器端擋下含金鑰的 push。"
+  allow_failure: true
+  <<: *rules_mr_and_push
+
+# =============================================================================
+# Stage: test
+# =============================================================================
+unit-tests:
+  stage: test
+  tags: [vm3, ci]
+  script:
+    - |
+      if [ ! -d tests ]; then
+        echo "目前 repo 沒有 tests/ 目錄，略過單元測試。"
+        echo "要開始寫測試時，把檔案放進 tests/ 就會自動被這個 job 撿到。"
+        exit 0
+      fi
+    - python -m pytest --cov --cov-report=xml --cov-report=term
+  coverage: '/TOTAL.*\s+(\d+%)/'
+  artifacts:
+    when: always
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+    expire_in: 1 week
+  <<: *rules_mr_and_push
+
+dbt-parse:
+  # 比單元測試更實際的一道：dbt parse 會抓出 ref() 指到不存在的模型、
+  # sources.yml 沒登記、Jinja 語法錯 —— 這些是這個專案最常見的錯。
+  # parse 不連資料庫，所以 CI 上跑是安全的。
+  stage: test
+  tags: [vm3, ci]
+  script:
+    - |
+      if ! command -v dbt >/dev/null 2>&1; then
+        echo "CI runner 上沒有 dbt，略過（VM4 的 post-deploy 會再 parse 一次）。"
+        exit 0
+      fi
+      cd dagster_workspace/dbt_project
+      [ -f profiles.yml ] || cp profiles.yml.example profiles.yml
+      dbt parse --profiles-dir .
+  allow_failure: true
+  <<: *rules_mr_and_push
+
+# =============================================================================
+# Stage: security —— 全庫、全歷史，不做「只掃改動」的取巧
+# =============================================================================
+secret-scanning:
+  stage: security
+  tags: [vm3, ci]
+  script:
+    # tree：現在的檔案內容
+    - ci/check_secrets.sh tree
+    # history：整條 git 歷史。跟本地 hook、pre-receive 用同一份 .gitleaks.toml，
+    # 所以三邊結果一致，不會出現「本地過了 CI 擋」的情況。
+    - ci/check_secrets.sh history
+  <<: *rules_security
+
+sast-bandit:
+  stage: security
+  tags: [vm3, ci]
+  script:
+    - ci/lint.sh sast
+  <<: *rules_security
+
+sca-dtrack:
+  stage: security
+  tags: [vm3, ci]
+  variables:
+    # 日常門檻：Critical + High 就擋。
+    # High 擋得住，是因為 base image 的 OS 套件（glibc / libc-bin ...）
+    # 已經由 ci/dtrack_suppress_os.sh 自動放行，不會灌爆這個數字。
+    # 擋住之後怎麼過：job log 最後會印三條路，或見
+    # docs/D-Track與Superset手冊/日常維運/04_弱掃紅燈與MR被卡住的解除流程.md
+    DTRACK_FAIL_ON_HIGH: "1"
+  script:
+    - ci/build_sbom.sh
+  artifacts:
+    when: always
+    paths:
+      - bom.json
+    expire_in: 1 week
+  rules:
+    # 刻意不含 schedule：每季的複掃由下面的 sca-dtrack-quarterly 負責，
+    # 兩個都跑的話會對同一個 D-Track 專案版本重複上傳 SBOM。
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_OPEN_MERGE_REQUESTS == null
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# -----------------------------------------------------------------------------
+# 定期弱掃（每季一次）
+# -----------------------------------------------------------------------------
+# 為什麼推送時掃過了還要定期掃？
+#   推送時掃的是「這份程式碼當下有沒有已知弱點」。但弱點資料庫每天在長 ——
+#   今天乾淨的套件，下個月可能被公告一個 Critical CVE。程式碼一行沒改，
+#   風險卻變了。所以要定期用**最新的弱點資料庫**重掃一次。
+#
+#   D-Track 本身會持續重新評分，但那只是它資料庫裡的數字變了，
+#   沒有人會主動去看。這個 job 的價值是「**把它變成一次會紅燈的 pipeline**」，
+#   而且留下可以拿給稽核看的執行紀錄。
+#
+# 排程設定：Settings → CI/CD → Schedules
+#   Cron: 0 3 1 */3 *   （1/4/7/10 月的 1 號 03:00）
+#   Variables: SCHEDULE_TYPE = quarterly
+# 詳見 docs/GitLab維運手冊/進階調整/15_D-Track定期弱掃.md
+# -----------------------------------------------------------------------------
+sca-dtrack-quarterly:
+  stage: security
+  tags: [vm3, ci]
+  variables:
+    # 每季門檻比日常嚴：連 Medium 也要擋。
+    # 日常擋到 High，每季這一次專門把 Medium 的技術債一起清掉。
+    DTRACK_FAIL_ON_HIGH: "1"
+    DTRACK_FAIL_ON_MEDIUM: "1"
+    # 弱點分析要重跑，給它更久的時間
+    DTRACK_POLL_MAX: "36"
+  script:
+    - ci/build_sbom.sh
+  artifacts:
+    when: always
+    paths:
+      - bom.json
+    expire_in: 1 year        # 稽核用，保留一年
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_TYPE == "quarterly"
+    # 也可以隨時手動觸發（例如聽到重大 CVE 公告時）
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
+      allow_failure: false
+
+# =============================================================================
+# Stage: deploy —— 只有合併進 main 才會跑
+# =============================================================================
+# 為什麼 main 才部署：
+#   main 是保護分支，禁止直接 push，只能透過 MR 進來；
+#   MR 必須 pipeline 綠燈 + 有人 code review 過才能合併。
+#   所以「進得了 main」本身就代表「被審過」，部署才安全。
+#   分支保護怎麼設：docs/GitLab維運手冊/日常維運/04_帳號_權限_分支保護.md
+# =============================================================================
+deploy:production:
+  stage: deploy
+  tags: [vm3, cd]
+  environment:
+    name: production
+    deployment_tier: production
+  variables:
+    # 這些值由 environment scope = production 的 CI/CD Variables 提供，
+    # 且必須勾選 Protected（只有保護分支拿得到）。
+    DEPLOY_PATH: "/data/deploy/workspace/dagster_workspace"
+    POST_DEPLOY_CMD: "sudo /usr/local/sbin/dai-post-deploy-vm4.sh"
+  script:
+    - ci/deploy_rsync.sh
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  # 部署不可以被後來的 pipeline 中途取消，會留下同步到一半的狀態
+  interruptible: false
+  resource_group: production-vm4   # 同時只准跑一個部署
+
+deploy:staging:
+  stage: deploy
+  tags: [vm3, cd]
+  environment:
+    name: staging
+    deployment_tier: staging
+  variables:
+    DEPLOY_PATH: "/data/deploy_test/workspace/dagster_workspace"
+    POST_DEPLOY_CMD: "sudo /usr/local/sbin/dai-post-deploy-vm4.sh"
+  script:
+    - ci/deploy_rsync.sh
+  rules:
+    # 測試環境走 develop 分支，或在 MR 上手動點一下
+    - if: $CI_COMMIT_BRANCH == "develop"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: manual
+      allow_failure: true
+  interruptible: false
+  resource_group: staging-vm4
+
+# =============================================================================
+# Stage: verify —— 每日排程對雜湊
+# =============================================================================
+# 在回答：「GitLab 上 main 的內容，跟正式機上實際在跑的檔案，還是同一份嗎？」
+# 排程設定：Settings → CI/CD → Schedules
+#   Cron: 30 8 * * *  （每天 08:30，批次 06:00 前後結束後留緩衝，且是上班時間）
+#   Variables: SCHEDULE_TYPE = verify
+# =============================================================================
+verify:production:
+  stage: verify
+  tags: [vm3, cd]
+  environment:
+    name: production
+    action: verify
+  variables:
+    DEPLOY_PATH: "/data/deploy/workspace/dagster_workspace"
+  script:
+    - ci/verify_sync.sh
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_TYPE == "verify"
+    # 也可以隨時手動點一次（例如懷疑有人動過正式機）
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
+      allow_failure: false
+  retry:
+    max: 2
+    when: [runner_system_failure, stuck_or_timeout_failure]

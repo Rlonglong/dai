@@ -1,0 +1,33 @@
+# =============================================================================
+# VM1 執行環境套件清單
+# =============================================================================
+# 來源：部署手冊 Phase 5.2 的實際盤點（pip3.11 list）。
+# 版本號請以正式機上實際安裝的為準 —— 這份要跟 VM1 的 venv 保持一致，
+# 否則 SCA 掃的是「紙上的環境」而不是「真正在跑的環境」。
+#
+# 更新方式（在 VM1 上）：
+#     source /run/media/root/D/python_env/dai_venv/bin/activate
+#     pip freeze > requirements.txt
+#   然後走正常 MR 流程推上來。
+#
+# 離線安裝（見部署手冊 Phase 5.2）：
+#     pip3.11 install --no-index --find-links=<wheel目錄> <wheel目錄>/*.whl
+# =============================================================================
+
+cffi==2.0.0
+cryptography==49.0.0
+dagster-pipes==1.13.11
+et_xmlfile==2.0.0
+numpy==2.2.6
+openpyxl==3.1.5
+packaging==26.2
+pandas==2.3.3
+pycparser==3.0
+pymssql==2.3.11
+pyodbc==5.3.0
+python-dateutil==2.9.0.post0
+python-dotenv==1.2.2
+pytz==2026.2
+six==1.17.0
+typing_extensions==4.15.0
+tzdata==2026.2
