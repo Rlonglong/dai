@@ -17,7 +17,7 @@ VM1 `/home/bcp_runner/scripts/` 這份程式碼要有**自己的 GitLab repo**�
 | **爆炸半徑** | VM1 腳本推壞 = 資料進不來；dbt 模型推壞 = 名單算錯。兩者要能各自 rollback |
 
 代價是「新增一張資料表」這種事要開兩個 MR（見
-[03_新增一張資料表](../../docs/Dagster維運手冊/日常維運/03_新增一張資料表.md)）。
+[03_新增一張資料表](../../../docs/Dagster維運手冊/日常維運/03_新增一張資料表.md)）。
 這是刻意的取捨——寧可多開一個 MR，也不要讓兩台機器的部署互相綁死。
 
 ---
@@ -82,8 +82,8 @@ git push -u origin main
 ### 5. 設定分支保護與 CI/CD Variables
 
 跟 `dagster_workspace` 完全一樣的做法，見
-[04_帳號_權限_分支保護](../../docs/GitLab維運手冊/日常維運/04_帳號_權限_分支保護.md)
-與 [13_Variables與環境隔離](../../docs/GitLab維運手冊/進階調整/13_Variables與環境隔離.md)。
+[04_帳號_權限_分支保護](../../GitLab維運手冊/日常維運/04_帳號_權限_分支保護.md)
+與 [13_Variables與環境隔離](../../GitLab維運手冊/進階調整/13_Variables與環境隔離.md)。
 
 本 repo 專屬的變數值：
 
@@ -101,39 +101,41 @@ git push -u origin main
 > 所以這個 repo 的 `deploy_exclude.txt` **必須**把 `ci/`、`docs/`、`.gitlab-ci.yml`
 > 這些排除掉，否則會被推到 VM1 上去。已經寫在範本裡了。
 
-### 6. 把 VM1 上原本的資料夾接管過來
+### 6. VM1 上的準備
 
 ```bash
 # 在 VM1，以 root
-# 先備份，萬一 rsync 排除清單有漏可以救回來
-tar czf /root/bcp_scripts_backup_$(date +%F).tar.gz /home/bcp_runner/scripts
-
-# 部署腳本安裝
 install -o root -g root -m 755 dai-post-deploy-vm1.sh /usr/local/sbin/
-echo 'gitlab_runner ALL=(root) NOPASSWD: /usr/local/sbin/dai-post-deploy-vm1.sh' \
-  > /etc/sudoers.d/dai-gitlab-runner
-echo 'Defaults!/usr/local/sbin/dai-post-deploy-vm1.sh !requiretty' \
-  >> /etc/sudoers.d/dai-gitlab-runner
+
+cat > /etc/sudoers.d/dai-gitlab-runner <<'EOF'
+gitlab_runner ALL=(root) NOPASSWD: /usr/local/sbin/dai-post-deploy-vm1.sh
+Defaults!/usr/local/sbin/dai-post-deploy-vm1.sh !requiretty
+EOF
 chmod 440 /etc/sudoers.d/dai-gitlab-runner
 visudo -c          # 一定要驗，sudoers 寫錯會鎖死 sudo
 
 # 讓 gitlab_runner 寫得進去
+mkdir -p /home/bcp_runner/scripts
 setfacl -R -m u:gitlab_runner:rwx /home/bcp_runner/scripts
 setfacl -d -m u:gitlab_runner:rwx /home/bcp_runner/scripts
 ```
 
-### 7. 第一次部署務必先 dry-run
+### 7. 首次部署
 
-```bash
-# 在 GitLab 上把 deploy job 改成手動觸發，或先在 runner 上：
-DEPLOY_HOST=... DEPLOY_USER=gitlab_runner DEPLOY_PATH=/home/bcp_runner/scripts \
-DEPLOY_SSH_KEY=... DEPLOY_KNOWN_HOSTS=... SOURCE_DIR=. \
-  ci/deploy_rsync.sh --dry-run
+```
+GitLab UI → 專案 → Build → Pipelines → Run pipeline（Branch: main）
 ```
 
-**逐行看過 dry-run 的輸出**，特別注意有沒有 `deleting` 開頭的行。
-那代表「VM1 上有、repo 裡沒有」的檔案會被刪掉——
-如果那是還沒進版控的東西（例如手改的臨時腳本），先把它補進 repo 再部署。
+deploy job 跑完後確認：
+
+```bash
+# 在 VM1
+ls -l /home/bcp_runner/scripts/          # 檔案都在，擁有者 bcp_runner，權限 640
+ls -l /home/bcp_runner/.env              # 還在，權限 600
+```
+
+`.env` 在 `/home/bcp_runner/` 底下（scripts/ 的外面），本來就不在傳輸範圍內；
+`deploy_exclude.txt` 再擋一次，是防止有人不小心在 `scripts/` 裡也放一份。
 
 ---
 

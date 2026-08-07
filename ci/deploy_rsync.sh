@@ -70,7 +70,7 @@ $SSH_CMD "${DEPLOY_USER}@${DEPLOY_HOST}" "test -d '${DEPLOY_PATH}'" \
        2. 目標機上有沒有 gitlab_runner 這個帳號、~/.ssh/authorized_keys 有沒有這把公鑰
        3. DEPLOY_KNOWN_HOSTS 的內容是不是目標機現在的 host key
        4. 目標目錄有沒有先建好、gitlab_runner 有沒有寫入權限（setfacl）
-     見 docs/GitLab維運手冊/附錄/A_gitlab_runner帳號與SSH金鑰.md"
+     見 gitlab_workspace/GitLab維運手冊/附錄/A_gitlab_runner帳號與SSH金鑰.md"
 
 # -----------------------------------------------------------------------------
 # rsync
@@ -105,7 +105,7 @@ fi
 #   VM4：chown 回 UID 10001（Dagster 容器的執行身分）+ 重產 dbt manifest
 #   VM1：chown 回 bcp_runner + 補執行權限
 #   為了不給 gitlab_runner 萬用 sudo，目標機上是一支 root 擁有的固定腳本，
-#   sudoers 只放行那一支。細節見 deploy/vm4/post_deploy.sh 開頭的說明。
+#   sudoers 只放行那一支。細節見 gitlab_workspace/post_deploy/dai-post-deploy-vm4.sh 開頭的說明。
 # -----------------------------------------------------------------------------
 if [[ -n "${POST_DEPLOY_CMD:-}" ]]; then
     section "CD · post-deploy"

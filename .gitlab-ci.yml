@@ -5,17 +5,19 @@
 #
 #   任何分支 push / MR  →  lint + test + security      （品質與資安閘門）
 #   合併進 main         →  deploy（rsync 推到 VM4）+ 立刻驗雜湊
-#   每日排程            →  verify（雜湊對帳）+ 全歷史 gitleaks + SCA 重掃
+#   每天 08:30 排程     →  verify（雜湊對帳）            SCHEDULE_TYPE=verify
+#   每季 1 號排程       →  完整資安複掃（gitleaks 全歷史 + bandit + D-Track）
+#                                                       SCHEDULE_TYPE=quarterly
 #
 # ★ 重要觀念：CI 不是防止金鑰外洩的地方 ★
 #   secret-scanning job 是在東西**已經推上 GitLab 之後**才跑的。
 #   真正的防護是「push 當下就擋掉」：
 #       ci/hooks/pre-push          本機（可被 --no-verify 繞過）
-#       ci/server_hooks/pre-receive VM3 伺服器端（繞不過，push 直接被拒）
+#       gitlab_workspace/server_hooks/pre-receive VM3 伺服器端（繞不過，push 直接被拒）
 #   這裡的 job 是最後一道防線與稽核紀錄，不是第一道。
-#   安裝方式見 docs/GitLab維運手冊/進階調整/10_CI_Pipeline設定詳解.md
+#   安裝方式見 gitlab_workspace/GitLab維運手冊/進階調整/10_CI_Pipeline設定詳解.md
 #
-# 正式 / 測試環境怎麼分：見 docs/GitLab維運手冊/進階調整/13_Variables與環境隔離.md
+# 正式 / 測試環境怎麼分：見 gitlab_workspace/GitLab維運手冊/進階調整/13_Variables與環境隔離.md
 # =============================================================================
 
 variables:
@@ -51,12 +53,15 @@ default:
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_OPEN_MERGE_REQUESTS == null
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
+# 排程有兩種，用 SCHEDULE_TYPE 這個變數區分，否則兩種排程會互相觸發對方的 job：
+#   SCHEDULE_TYPE=verify     每天 08:30  → 只跑雜湊對帳
+#   SCHEDULE_TYPE=quarterly  每季 1 號   → 跑完整資安複掃（不跑對帳、不跑部署）
 .rules_security: &rules_security
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_OPEN_MERGE_REQUESTS == null
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_TYPE == "quarterly"
 
 # =============================================================================
 # Stage: lint —— 只檢查這次動到的檔案（原因見 ci/lint.sh 開頭）
@@ -168,7 +173,52 @@ sca-dtrack:
     paths:
       - bom.json
     expire_in: 1 week
-  <<: *rules_security
+  rules:
+    # 刻意不含 schedule：每季的複掃由下面的 sca-dtrack-quarterly 負責，
+    # 兩個都跑的話會對同一個 D-Track 專案版本重複上傳 SBOM。
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_OPEN_MERGE_REQUESTS == null
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# -----------------------------------------------------------------------------
+# 定期弱掃（每季一次）
+# -----------------------------------------------------------------------------
+# 為什麼推送時掃過了還要定期掃？
+#   推送時掃的是「這份程式碼當下有沒有已知弱點」。但弱點資料庫每天在長 ——
+#   今天乾淨的套件，下個月可能被公告一個 Critical CVE。程式碼一行沒改，
+#   風險卻變了。所以要定期用**最新的弱點資料庫**重掃一次。
+#
+#   D-Track 本身會持續重新評分，但那只是它資料庫裡的數字變了，
+#   沒有人會主動去看。這個 job 的價值是「**把它變成一次會紅燈的 pipeline**」，
+#   而且留下可以拿給稽核看的執行紀錄。
+#
+# 排程設定：Settings → CI/CD → Schedules
+#   Cron: 0 3 1 */3 *   （1/4/7/10 月的 1 號 03:00）
+#   Variables: SCHEDULE_TYPE = quarterly
+# 詳見 gitlab_workspace/GitLab維運手冊/進階調整/15_D-Track定期弱掃.md
+# -----------------------------------------------------------------------------
+sca-dtrack-quarterly:
+  stage: security
+  tags: [vm3, ci]
+  variables:
+    # 定期掃描的門檻比日常嚴：High 也要擋。
+    # 日常開發不擋 High 是為了不卡住進度，但每季這一次就是專門來清債的。
+    DTRACK_FAIL_ON_HIGH: "1"
+    # 弱點分析要重跑，給它更久的時間
+    DTRACK_POLL_MAX: "36"
+  script:
+    - ci/build_sbom.sh
+  artifacts:
+    when: always
+    paths:
+      - bom.json
+    expire_in: 1 year        # 稽核用，保留一年
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_TYPE == "quarterly"
+    # 也可以隨時手動觸發（例如聽到重大 CVE 公告時）
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
+      allow_failure: false
 
 # =============================================================================
 # Stage: deploy —— 只有合併進 main 才會跑
@@ -177,7 +227,7 @@ sca-dtrack:
 #   main 是保護分支，禁止直接 push，只能透過 MR 進來；
 #   MR 必須 pipeline 綠燈 + 有人 code review 過才能合併。
 #   所以「進得了 main」本身就代表「被審過」，部署才安全。
-#   分支保護怎麼設：docs/GitLab維運手冊/日常維運/04_帳號_權限_分支保護.md
+#   分支保護怎麼設：gitlab_workspace/GitLab維運手冊/日常維運/04_帳號_權限_分支保護.md
 # =============================================================================
 deploy:production:
   stage: deploy
@@ -222,8 +272,9 @@ deploy:staging:
 # Stage: verify —— 每日排程對雜湊
 # =============================================================================
 # 在回答：「GitLab 上 main 的內容，跟正式機上實際在跑的檔案，還是同一份嗎？」
-# 排程設定：Settings → CI/CD → Schedules，建議每天 06:00（早於當日排程開跑）
-#           變數 VERIFY_ONLY=1，避免排程去跑 deploy
+# 排程設定：Settings → CI/CD → Schedules
+#   Cron: 30 8 * * *  （每天 08:30，批次 06:00 前後結束後留緩衝，且是上班時間）
+#   Variables: SCHEDULE_TYPE = verify
 # =============================================================================
 verify:production:
   stage: verify
@@ -236,7 +287,7 @@ verify:production:
   script:
     - ci/verify_sync.sh
   rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_TYPE == "verify"
     # 也可以隨時手動點一次（例如懷疑有人動過正式機）
     - if: $CI_PIPELINE_SOURCE == "web"
       when: manual

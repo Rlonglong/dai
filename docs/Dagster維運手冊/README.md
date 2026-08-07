@@ -24,7 +24,7 @@
 本手冊只講「**改什麼**」。「**怎麼把改動送上正式機**」（開分支、MR、code review、
 資安檢查、rsync 同步、每日 hash 對帳）是另一套：
 
-👉 **[GitLab 維運手冊](../GitLab維運手冊/README.md)**
+👉 **[GitLab 維運手冊](../../gitlab_workspace/GitLab維運手冊/README.md)**
 
 ---
 

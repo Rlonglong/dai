@@ -24,7 +24,7 @@ CONFIG="$(repo_root)/.gitleaks.toml"
 if [[ -z "$GITLEAKS_BIN" || ! -x "$GITLEAKS_BIN" ]]; then
     die "找不到 gitleaks 執行檔。
      設定方式：export GITLEAKS_BIN=/path/to/gitleaks
-     或把它放進 PATH。安裝方式見 docs/GitLab維運手冊/日常維運/03_本地環境設定與提交前檢查.md"
+     或把它放進 PATH。安裝方式見 gitlab_workspace/GitLab維運手冊/日常維運/03_本地環境設定與提交前檢查.md"
 fi
 
 MODE="${1:-tree}"

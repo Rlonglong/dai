@@ -34,7 +34,7 @@
 ```
 ci/check_secrets.sh  ←──┬── ci/hooks/pre-commit
                         ├── ci/hooks/pre-push
-                        ├── ci/server_hooks/pre-receive
+                        ├── gitlab_workspace/server_hooks/pre-receive
                         └── .gitlab-ci.yml 的 secret-scanning job
         ↓
    .gitleaks.toml（唯一一份規則）
@@ -107,7 +107,7 @@ docker cp .gitleaks.toml  gitlab:/etc/gitlab/gitleaks.toml
 ```bash
 docker exec gitlab mkdir -p /var/opt/gitlab/gitaly/custom_hooks/pre-receive.d
 
-docker cp ci/server_hooks/pre-receive \
+docker cp gitlab_workspace/server_hooks/pre-receive \
           gitlab:/var/opt/gitlab/gitaly/custom_hooks/pre-receive.d/10-gitleaks
 
 docker exec gitlab chmod 755 \

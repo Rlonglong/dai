@@ -287,33 +287,32 @@ CD 需要新開兩條規則：
 
 ---
 
-## 9. 首次接管既有目錄
+## 9. 首次部署
 
-VM1 / VM4 上已經有正在跑的檔案，第一次讓 CD 接管時：
+從零建置的環境，`.env` 與 `profiles.yml` 是在部署時人工建立的，
+其餘檔案都由 CD 送過去，所以直接在 GitLab 上跑一次 pipeline 就好：
 
-```bash
-# 1. ★先備份★ 萬一排除清單有漏，這是唯一的救命索
-tar czf /root/backup_before_cd_$(date +%F).tar.gz /home/bcp_runner/scripts
-tar czf /root/backup_before_cd_$(date +%F).tar.gz /data/deploy/workspace/dagster_workspace
-
-# 2. 確認 .env / profiles.yml 都在，並記下內容（等下要核對它們有沒有活下來）
-sha256sum /data/deploy/workspace/dagster_workspace/dagster_code/.env
-
-# 3. ★一定要先 dry-run★
-ci/deploy_rsync.sh --dry-run
-
-# 4. 逐行檢查輸出，特別是 deleting 開頭的行
-#    看到 deleting .env 或 deleting profiles.yml 就停下來，
-#    表示排除清單有問題
-
-# 5. 確認無誤才真的跑
-ci/deploy_rsync.sh
-
-# 6. 核對機密檔案還在、內容沒變
-sha256sum /data/deploy/workspace/dagster_workspace/dagster_code/.env
+```
+GitLab UI → 專案 → Build → Pipelines → Run pipeline（Branch: main）
 ```
 
-備份至少保留一個月再刪。
+跑完到目標機確認機密檔案還在、權限正確：
+
+```bash
+# VM4
+ls -l /data/deploy/workspace/dagster_workspace/dagster_code/.env       # 應為 600
+ls -l /data/deploy/workspace/dagster_workspace/dbt_project/profiles.yml # 應為 600
+# VM1
+ls -l /home/bcp_runner/.env                                            # 應為 600
+```
+
+這兩個檔案能在 `rsync --delete` 之下活下來，靠的是 `deploy_exclude.txt`
+把它們排除掉（rsync 的 `--delete` 不會刪被 `--exclude` 排除的檔案）。
+
+> 💡 **日後**如果遇到「目標機上有 repo 裡沒有的檔案」的情況
+> （例如有人在正式機上留了臨時檔），先用 `ci/deploy_rsync.sh --dry-run`
+> 看一次輸出，確認 `deleting` 開頭的行都是該刪的，再真的跑。
+> 平時不需要 —— 每日雜湊對帳會先一步告訴你有這種檔案存在。
 
 ---
 
@@ -332,6 +331,6 @@ sha256sum /data/deploy/workspace/dagster_workspace/dagster_code/.env
 [ ] 反向驗證：從別台機器用同一把金鑰 → 被拒
 [ ] GitLab Variables 設好（File 型別、Protected、environment scope）
 [ ] 防火牆 VM3→VM4:22、VM3→VM1:22 已開通
-[ ] 首次部署前已備份，且 dry-run 檢查過
-[ ] 首次部署後 .env / profiles.yml 的 sha256 沒變
+[ ] 首次部署 pipeline 綠燈
+[ ] 部署後目標機上的 .env / profiles.yml 還在、權限 600
 ```

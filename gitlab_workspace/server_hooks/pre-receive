@@ -26,7 +26,7 @@
 #
 #   # 2. 放成「全域」hook，所有專案自動生效
 #   docker exec gitlab mkdir -p /var/opt/gitlab/gitaly/custom_hooks/pre-receive.d
-#   docker cp ci/server_hooks/pre-receive \
+#   docker cp gitlab_workspace/server_hooks/pre-receive \
 #             gitlab:/var/opt/gitlab/gitaly/custom_hooks/pre-receive.d/10-gitleaks
 #   docker exec gitlab chmod 755 /var/opt/gitlab/gitaly/custom_hooks/pre-receive.d/10-gitleaks
 #   docker exec gitlab chown git:git /var/opt/gitlab/gitaly/custom_hooks/pre-receive.d/10-gitleaks
@@ -37,7 +37,7 @@
 #   docker exec gitlab chmod 755 /usr/local/bin/gitleaks
 #
 # 詳細步驟與驗證方式：
-#   docs/GitLab維運手冊/進階調整/10_CI_Pipeline設定詳解.md
+#   gitlab_workspace/GitLab維運手冊/進階調整/10_CI_Pipeline設定詳解.md
 # =============================================================================
 
 set -uo pipefail
@@ -51,7 +51,7 @@ Z40="0000000000000000000000000000000000000000"
 if [[ ! -x "$GITLEAKS_BIN" ]]; then
     echo "" >&2
     echo "❌ [DAI] 伺服器端找不到 gitleaks（${GITLEAKS_BIN}），為安全起見拒絕本次 push。" >&2
-    echo "   請聯絡 GitLab 管理員依 docs/GitLab維運手冊 重新部署 pre-receive hook。" >&2
+    echo "   請聯絡 GitLab 管理員依 gitlab_workspace/GitLab維運手冊 重新部署 pre-receive hook。" >&2
     exit 1
 fi
 

@@ -38,12 +38,15 @@ default:
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_OPEN_MERGE_REQUESTS == null
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
+# 排程有兩種，用 SCHEDULE_TYPE 區分，否則兩種排程會互相觸發對方的 job：
+#   SCHEDULE_TYPE=verify     每天 08:30  → 只跑雜湊對帳
+#   SCHEDULE_TYPE=quarterly  每季 1 號   → 完整資安複掃
 .rules_security: &rules_security
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_OPEN_MERGE_REQUESTS == null
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_TYPE == "quarterly"
 
 # =============================================================================
 # lint
@@ -119,7 +122,42 @@ sca-dtrack:
     when: always
     paths: [bom.json]
     expire_in: 1 week
-  <<: *rules_security
+  rules:
+    # 刻意不含 schedule：每季複掃交給 sca-dtrack-quarterly，
+    # 兩個都跑會對同一個 D-Track 專案版本重複上傳 SBOM。
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_OPEN_MERGE_REQUESTS == null
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# -----------------------------------------------------------------------------
+# 定期弱掃（每季一次）
+# -----------------------------------------------------------------------------
+# 推送時掃的是「這份程式碼當下有沒有已知弱點」，但弱點資料庫每天在長 ——
+# 程式碼一行沒改，風險卻會變。所以每季用最新的弱點資料庫重掃一次。
+#
+# 這個 repo 特別重要：VM1 的腳本碰得到明碼個資與交易明細，
+# 它依賴的 cryptography / pymssql / pandas 一旦出 CVE，影響的是資料本身。
+#
+# 排程：Settings → CI/CD → Schedules
+#   Cron: 0 3 1 */3 *      Variables: SCHEDULE_TYPE = quarterly
+# -----------------------------------------------------------------------------
+sca-dtrack-quarterly:
+  stage: security
+  tags: [vm3, ci]
+  variables:
+    DTRACK_FAIL_ON_HIGH: "1"
+    DTRACK_POLL_MAX: "36"
+  script:
+    - ci/build_sbom.sh
+  artifacts:
+    when: always
+    paths: [bom.json]
+    expire_in: 1 year        # 稽核用
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_TYPE == "quarterly"
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
+      allow_failure: false
 
 # =============================================================================
 # deploy
@@ -173,7 +211,7 @@ verify:production:
   script:
     - ci/verify_sync.sh
   rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_TYPE == "verify"
     - if: $CI_PIPELINE_SOURCE == "web"
       when: manual
       allow_failure: false
