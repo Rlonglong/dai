@@ -1,0 +1,64 @@
+# =============================================================================
+# rsync 排除清單 —— bcp-scripts → VM1
+# =============================================================================
+# 用法（見 ci/deploy_rsync.sh）：
+#   rsync -a --delete --exclude-from=deploy_exclude.txt \
+#         ./ gitlab_runner@VM1:/home/bcp_runner/scripts/
+#
+# 路徑一律相對於「傳輸根目錄」。
+#
+# ★這個 repo 的傳輸根目錄就是 repo 根目錄本身★（SOURCE_DIR="."），
+#   跟 dagster-workspace 不一樣（那邊是 repo 底下的 dagster_workspace/ 子目錄）。
+#   所以 ci/、.gitlab-ci.yml 這些「開發用、正式機不需要」的東西
+#   如果不在這裡排除，就會一起被推到 /home/bcp_runner/scripts/ 去。
+#
+# ★這份清單同時是「刪除保護清單」★
+#   rsync 的 --delete 預設**不會**刪掉被 --exclude 排除的檔案（那叫
+#   --delete-excluded，我們沒有開）。所以只要列在這裡，VM1 上那份就活得下來。
+#   漏一行 = 部署當下把正式機的東西洗掉。
+# =============================================================================
+
+# --- 機密：VM1 上人工建立，永遠不由 CD 覆寫或刪除 -----------------------------
+# 正式的 .env 在 /home/bcp_runner/.env（scripts/ 的外面），本來就不在傳輸範圍。
+# 這幾行是防止有人不小心在 repo 或 scripts/ 裡也放一份。
+.env
+.env.*
+*.env
+!.env.example
+
+# --- CI/CD 與開發用檔案：正式機不需要，也不該出現在那裡 -----------------------
+ci/
+docs/
+tests/
+.gitlab-ci.yml
+.gitleaks.toml
+.flake8
+bandit.yaml
+pyproject.toml
+deploy_exclude.txt
+README.md
+
+# --- 執行期產物：正式機自己會產生，不要用 repo 的內容覆蓋 ---------------------
+logs/
+output/
+tmp/
+*.log
+
+# --- SBOM 與掃描產物（CI 產生的，不該推上正式機）------------------------------
+bom.json
+
+# --- Python 快取與虛擬環境 -----------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# --- 版控與工具的中繼檔（不該出現在正式機上）---------------------------------
+.git/
+.gitignore
+.gitattributes
+.DS_Store
+._*
+
+# --- 同步稽核用的 manifest（由 verify_sync 自己管理，不要 rsync 過去）--------
+.sync_manifest.sha256

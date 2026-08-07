@@ -26,6 +26,9 @@ id_ed25519*
 *.txt
 !requirements*.txt
 !**/README*.txt
+# ★ 這兩個是 repo 必要檔案，不是資料檔 ★
+#   deploy_exclude.txt 少了它，ci/deploy_rsync.sh 會直接失敗、部署不了
+!deploy_exclude.txt
 *.xls
 *.xlsx
 *.zip
