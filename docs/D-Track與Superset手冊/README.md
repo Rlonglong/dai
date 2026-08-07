@@ -10,11 +10,6 @@
 兩套包在同一份手冊，是因為它們的共同點是「**UI 操作為主、不需要改程式碼**」，
 使用者重疊，而且都靠 Keycloak SSO 登入。
 
-> ⚠️ **機器位置**：依目前的 compose 設定，
-> **Dependency-Track 跑在 VM3**（與 GitLab、Container Registry 同機），
-> **Superset 跑在 VM5**（與 Keycloak、nginx 同機）。
-> 若正式環境把 D-Track 改到 VM5，請一併更新本手冊與部署手冊 Phase 3。
-
 ---
 
 ## 先看這篇
