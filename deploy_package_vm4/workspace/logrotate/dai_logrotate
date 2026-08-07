@@ -1,0 +1,46 @@
+# =============================================================================
+# DAI log rotation 設定（VM4）
+# 部署路徑：/etc/logrotate.d/dai
+# =============================================================================
+
+# 一般元件 log（保留 90 天）
+/var/log/dai/*/*/*log {
+    daily
+    rotate 90
+    compress
+    delaycompress
+    missingok
+    notifempty
+    dateext
+    dateformat -%Y-%m-%d
+    create 0640 root dai_admin
+    sharedscripts
+    postrotate
+        # 通知 rsyslog 重新開啟 log 檔案（需要時）
+        /usr/lib/rsyslog/rsyslog-rotate 2>/dev/null || \
+          systemctl kill --kill-who=main --signal=HUP rsyslog.service
+    endscript
+}
+
+# hash 完整性 manifest（保留 365 天）
+/var/log/dai-integrity/*.sha256 {
+    monthly
+    rotate 12
+    compress
+    delaycompress
+    missingok
+    notifempty
+    dateext
+    dateformat -%Y-%m
+    create 0640 root root
+}
+
+# cron 執行 log（保留 30 天）
+/var/log/dai-integrity/hash_cron.log {
+    weekly
+    rotate 4
+    compress
+    missingok
+    notifempty
+    create 0640 root root
+}
