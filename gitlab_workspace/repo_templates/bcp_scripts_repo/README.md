@@ -39,7 +39,7 @@ mkdir -p ~/bcp-scripts-init && cd ~/bcp-scripts-init
 
 # 先複製這個範本資料夾裡的設定檔過來
 #   .gitignore  .gitleaks.toml  .gitlab-ci.yml  deploy_exclude.txt
-#   requirements.txt  .flake8  bandit.yaml  pyproject.toml  ci/
+#   requirements.txt  .flake8  pyproject.toml  ci/   （bandit 設定在 ci/bandit.yaml）
 
 # 再把 VM1 上的腳本複製進來
 cp -r /home/bcp_runner/scripts/* .
@@ -82,8 +82,8 @@ git push -u origin main
 ### 5. 設定分支保護與 CI/CD Variables
 
 跟 `dagster_workspace` 完全一樣的做法，見
-[04_帳號_權限_分支保護](../../GitLab維運手冊/日常維運/04_帳號_權限_分支保護.md)
-與 [13_Variables與環境隔離](../../GitLab維運手冊/進階調整/13_Variables與環境隔離.md)。
+[04_帳號_權限_分支保護](../../../docs/GitLab維運手冊/日常維運/04_帳號_權限_分支保護.md)
+與 [13_Variables與環境隔離](../../../docs/GitLab維運手冊/進階調整/13_Variables與環境隔離.md)。
 
 本 repo 專屬的變數值：
 
@@ -148,6 +148,6 @@ ls -l /home/bcp_runner/.env              # 還在，權限 600
 | `.gitlab-ci.yml` | CI/CD pipeline |
 | `requirements.txt` | 套件清單（取自部署手冊 Phase 5.2 的實際盤點） |
 
-`ci/`、`.gitleaks.toml`、`.flake8`、`bandit.yaml`、`pyproject.toml`
+`ci/`、`.gitleaks.toml`、`.flake8`、`pyproject.toml`
 直接從 `dagster_workspace` repo 複製過去即可，內容完全相同——
 **兩個 repo 的檢查規則刻意保持一致**，開發者換 repo 不需要重新學一套。

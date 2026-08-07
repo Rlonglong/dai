@@ -136,6 +136,6 @@ require_vars() {
         die "缺少必要的 CI/CD Variable：${missing[*]}
      設定位置：GitLab → Settings → CI/CD → Variables
      正式環境的變數請勾選 Protected + Masked，並用 environment scope 區隔 staging / production
-     （見 gitlab_workspace/GitLab維運手冊/進階調整/13_Variables與環境隔離.md）"
+     （見 docs/GitLab維運手冊/進階調整/13_Variables與環境隔離.md）"
     fi
 }

@@ -14,7 +14,7 @@ Dagster 手冊講「**改什麼**」，這套手冊講「**怎麼把改動安全
 📘 **[00_架構與同步機制總覽.md](./00_架構與同步機制總覽.md)**
 兩個 repo、三台機器、四道資安關卡怎麼串起來。第一次接觸請先看完。
 
-📂 **[../README.md](../README.md)**
+📂 **[../README.md](../../gitlab_workspace/README.md)**
 `gitlab_workspace/` 每個檔案放什麼、每一支 CI/CD 程式在做什麼。
 
 ---

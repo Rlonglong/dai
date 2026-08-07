@@ -15,9 +15,9 @@
 #       ci/hooks/pre-push          本機（可被 --no-verify 繞過）
 #       gitlab_workspace/server_hooks/pre-receive VM3 伺服器端（繞不過，push 直接被拒）
 #   這裡的 job 是最後一道防線與稽核紀錄，不是第一道。
-#   安裝方式見 gitlab_workspace/GitLab維運手冊/進階調整/10_CI_Pipeline設定詳解.md
+#   安裝方式見 docs/GitLab維運手冊/進階調整/10_CI_Pipeline設定詳解.md
 #
-# 正式 / 測試環境怎麼分：見 gitlab_workspace/GitLab維運手冊/進階調整/13_Variables與環境隔離.md
+# 正式 / 測試環境怎麼分：見 docs/GitLab維運手冊/進階調整/13_Variables與環境隔離.md
 # =============================================================================
 
 variables:
@@ -195,7 +195,7 @@ sca-dtrack:
 # 排程設定：Settings → CI/CD → Schedules
 #   Cron: 0 3 1 */3 *   （1/4/7/10 月的 1 號 03:00）
 #   Variables: SCHEDULE_TYPE = quarterly
-# 詳見 gitlab_workspace/GitLab維運手冊/進階調整/15_D-Track定期弱掃.md
+# 詳見 docs/GitLab維運手冊/進階調整/15_D-Track定期弱掃.md
 # -----------------------------------------------------------------------------
 sca-dtrack-quarterly:
   stage: security
@@ -227,7 +227,7 @@ sca-dtrack-quarterly:
 #   main 是保護分支，禁止直接 push，只能透過 MR 進來；
 #   MR 必須 pipeline 綠燈 + 有人 code review 過才能合併。
 #   所以「進得了 main」本身就代表「被審過」，部署才安全。
-#   分支保護怎麼設：gitlab_workspace/GitLab維運手冊/日常維運/04_帳號_權限_分支保護.md
+#   分支保護怎麼設：docs/GitLab維運手冊/日常維運/04_帳號_權限_分支保護.md
 # =============================================================================
 deploy:production:
   stage: deploy

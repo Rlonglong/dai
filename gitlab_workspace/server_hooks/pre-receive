@@ -37,7 +37,7 @@
 #   docker exec gitlab chmod 755 /usr/local/bin/gitleaks
 #
 # 詳細步驟與驗證方式：
-#   gitlab_workspace/GitLab維運手冊/進階調整/10_CI_Pipeline設定詳解.md
+#   docs/GitLab維運手冊/進階調整/10_CI_Pipeline設定詳解.md
 # =============================================================================
 
 set -uo pipefail
@@ -51,7 +51,7 @@ Z40="0000000000000000000000000000000000000000"
 if [[ ! -x "$GITLEAKS_BIN" ]]; then
     echo "" >&2
     echo "❌ [DAI] 伺服器端找不到 gitleaks（${GITLEAKS_BIN}），為安全起見拒絕本次 push。" >&2
-    echo "   請聯絡 GitLab 管理員依 gitlab_workspace/GitLab維運手冊 重新部署 pre-receive hook。" >&2
+    echo "   請聯絡 GitLab 管理員依 docs/GitLab維運手冊 重新部署 pre-receive hook。" >&2
     exit 1
 fi
 

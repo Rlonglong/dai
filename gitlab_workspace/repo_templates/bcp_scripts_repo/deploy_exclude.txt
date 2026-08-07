@@ -33,7 +33,6 @@ tests/
 .gitlab-ci.yml
 .gitleaks.toml
 .flake8
-bandit.yaml
 pyproject.toml
 deploy_exclude.txt
 README.md

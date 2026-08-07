@@ -73,7 +73,7 @@ do_style() {
 do_sast() {
     ((${#PY_FILES[@]} == 0)) && { log_info "沒有 .py 變動，略過 bandit"; return 0; }
     need_cmd bandit
-    run_check "Python 資安掃描 (bandit)" bandit -q -c bandit.yaml -ll "${PY_FILES[@]}"
+    run_check "Python 資安掃描 (bandit)" bandit -q -c "$(repo_root)/ci/bandit.yaml" -ll "${PY_FILES[@]}"
 }
 
 do_sql() {

@@ -2,15 +2,16 @@
 
 這裡是 **VM3（GitLab）** 這一側的全部設定與程式。
 本檔只說明**哪個位置放什麼**；操作方式、日常維運、進階調整請看
-[`GitLab維運手冊/`](./GitLab維運手冊/README.md)。
+[`GitLab維運手冊/`](../docs/GitLab維運手冊/README.md)。
 
 > 📦 **這整個資料夾會被打包進 `deploy_package_vm3.tar.gz`**，
 > 跟 `dagster_workspace/` 整包放進 VM4 的 zip 是同樣的概念。
 >
 > 差別在於：`dagster_workspace/` 是**持續由 CD 用 rsync 同步**的執行期程式碼；
 > `gitlab_workspace/` 是**一次性的建置素材** —— 部署時裝好 hook、裝好腳本、
-> 建好 repo 就完成任務，之後不會再被自動覆蓋。所以手冊放在裡面沒有問題
-> （`dagster_workspace/` 的手冊必須搬到 `docs/`，因為它會被 rsync 推到 VM4）。
+> 建好 repo 就完成任務，之後不會再被自動覆蓋。
+>
+> 📘 **手冊不在這裡**，全部集中在 [`docs/`](../docs/README.md)，不進任何部署範圍。
 
 ---
 
@@ -18,16 +19,16 @@
 
 | 我想做的事 | 去哪裡 |
 |---|---|
-| 我要改程式碼並上線 | [GitLab維運手冊/日常維運/01_開發人員_日常開發流程.md](./GitLab維運手冊/日常維運/01_開發人員_日常開發流程.md) |
-| 我每天要檢查什麼 | [GitLab維運手冊/日常維運/02_維運人員_每日檢查.md](./GitLab維運手冊/日常維運/02_維運人員_每日檢查.md) |
-| 新機器怎麼設定、被 hook 擋住怎麼修 | [GitLab維運手冊/日常維運/03_本地環境設定與提交前檢查.md](./GitLab維運手冊/日常維運/03_本地環境設定與提交前檢查.md) |
-| 新人加入 / 離職 / 分支保護怎麼設 | [GitLab維運手冊/日常維運/04_帳號_權限_分支保護.md](./GitLab維運手冊/日常維運/04_帳號_權限_分支保護.md) |
-| 某個 CI job 在做什麼 | [GitLab維運手冊/進階調整/10_CI_Pipeline設定詳解.md](./GitLab維運手冊/進階調整/10_CI_Pipeline設定詳解.md) |
-| rsync 參數 / 排除清單怎麼改 | [GitLab維運手冊/進階調整/11_CD_rsync部署機制.md](./GitLab維運手冊/進階調整/11_CD_rsync部署機制.md) |
-| 雜湊對帳紅了怎麼查 | [GitLab維運手冊/進階調整/12_同步完整性稽核.md](./GitLab維運手冊/進階調整/12_同步完整性稽核.md) |
-| 測試碰到正式 DB 了 | [GitLab維運手冊/進階調整/13_Variables與環境隔離.md](./GitLab維運手冊/進階調整/13_Variables與環境隔離.md) |
-| D-Track 弱掃、每季定期掃 | [GitLab維運手冊/進階調整/15_D-Track定期弱掃.md](./GitLab維運手冊/進階調整/15_D-Track定期弱掃.md) |
-| 出事了 | [GitLab維運手冊/進階調整/14_疑難排解.md](./GitLab維運手冊/進階調整/14_疑難排解.md) |
+| 我要改程式碼並上線 | [GitLab維運手冊/日常維運/01_開發人員_日常開發流程.md](../docs/GitLab維運手冊/日常維運/01_開發人員_日常開發流程.md) |
+| 我每天要檢查什麼 | [GitLab維運手冊/日常維運/02_維運人員_每日檢查.md](../docs/GitLab維運手冊/日常維運/02_維運人員_每日檢查.md) |
+| 新機器怎麼設定、被 hook 擋住怎麼修 | [GitLab維運手冊/日常維運/03_本地環境設定與提交前檢查.md](../docs/GitLab維運手冊/日常維運/03_本地環境設定與提交前檢查.md) |
+| 新人加入 / 離職 / 分支保護怎麼設 | [GitLab維運手冊/日常維運/04_帳號_權限_分支保護.md](../docs/GitLab維運手冊/日常維運/04_帳號_權限_分支保護.md) |
+| 某個 CI job 在做什麼 | [GitLab維運手冊/進階調整/10_CI_Pipeline設定詳解.md](../docs/GitLab維運手冊/進階調整/10_CI_Pipeline設定詳解.md) |
+| rsync 參數 / 排除清單怎麼改 | [GitLab維運手冊/進階調整/11_CD_rsync部署機制.md](../docs/GitLab維運手冊/進階調整/11_CD_rsync部署機制.md) |
+| 雜湊對帳紅了怎麼查 | [GitLab維運手冊/進階調整/12_同步完整性稽核.md](../docs/GitLab維運手冊/進階調整/12_同步完整性稽核.md) |
+| 測試碰到正式 DB 了 | [GitLab維運手冊/進階調整/13_Variables與環境隔離.md](../docs/GitLab維運手冊/進階調整/13_Variables與環境隔離.md) |
+| D-Track 弱掃、每季定期掃 | [GitLab維運手冊/進階調整/15_D-Track定期弱掃.md](../docs/GitLab維運手冊/進階調整/15_D-Track定期弱掃.md) |
+| 出事了 | [GitLab維運手冊/進階調整/14_疑難排解.md](../docs/GitLab維運手冊/進階調整/14_疑難排解.md) |
 | 從零建置 | [部署手冊 Phase 4](../README.md) |
 
 ---
@@ -38,7 +39,6 @@
 gitlab_workspace/                    ← ★整包放進 deploy_package_vm3★
 │
 ├── README.md                        ← 你正在看的這份
-├── GitLab維運手冊/                   ← 所有文件（見下方）
 │
 ├── server_hooks/
 │   └── pre-receive                  ← ★最重要的一支★ 裝在 GitLab 容器裡，
@@ -129,36 +129,10 @@ git hook 也要用同一份 —— 放進 `gitlab_workspace/` 反而會拿不到
 | `ci/build_sbom.sh` | 產 SBOM → 上傳 D-Track → 等分析 → 依 Critical/High 決定擋不擋門 |
 
 推送時擋 Critical；**每季定期複掃**連 High 一起擋（見
-[15_D-Track定期弱掃](./GitLab維運手冊/進階調整/15_D-Track定期弱掃.md)）。
+[15_D-Track定期弱掃](../docs/GitLab維運手冊/進階調整/15_D-Track定期弱掃.md)）。
 
 ---
 
-## 手冊資料夾
-
-```
-GitLab維運手冊/
-├── README.md                          ← 手冊索引：誰該讀哪一篇
-├── 00_架構與同步機制總覽.md             ← 先看這篇建立全貌
-│
-├── 日常維運/                            ← 照著做就好，不用懂內部機制
-│   ├── 01_開發人員_日常開發流程.md
-│   ├── 02_維運人員_每日檢查.md
-│   ├── 03_本地環境設定與提交前檢查.md
-│   └── 04_帳號_權限_分支保護.md
-│
-├── 進階調整/                            ← 要改 pipeline 或伺服器設定
-│   ├── 10_CI_Pipeline設定詳解.md
-│   ├── 11_CD_rsync部署機制.md
-│   ├── 12_同步完整性稽核.md
-│   ├── 13_Variables與環境隔離.md
-│   ├── 14_疑難排解.md
-│   └── 15_D-Track定期弱掃.md
-│
-└── 附錄/
-    └── A_gitlab_runner帳號與SSH金鑰.md
-```
-
----
 
 ## 兩個排程
 
@@ -181,6 +155,6 @@ GitLab維運手冊/
 | `post_deploy/dai-post-deploy-vm4.sh` | **VM4** `/usr/local/sbin/` | `install -o root -g root -m 755` |
 | `post_deploy/dai-post-deploy-vm1.sh` | **VM1** `/usr/local/sbin/` | 同上 |
 | `repo_templates/bcp_scripts_repo/*` | 新建的 `bcp-scripts` GitLab repo | `cp` 進去後 commit |
-| `GitLab維運手冊/` | 留在 VM3 供查閱 | 不用裝 |
+| — | 手冊不在這個資料夾，在 [`docs/GitLab維運手冊/`](../docs/GitLab維運手冊/README.md) | 不進部署包 |
 
 完整步驟見 [部署手冊 Phase 4](../README.md)。

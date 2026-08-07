@@ -70,7 +70,7 @@ $SSH_CMD "${DEPLOY_USER}@${DEPLOY_HOST}" "test -d '${DEPLOY_PATH}'" \
        2. 目標機上有沒有 gitlab_runner 這個帳號、~/.ssh/authorized_keys 有沒有這把公鑰
        3. DEPLOY_KNOWN_HOSTS 的內容是不是目標機現在的 host key
        4. 目標目錄有沒有先建好、gitlab_runner 有沒有寫入權限（setfacl）
-     見 gitlab_workspace/GitLab維運手冊/附錄/A_gitlab_runner帳號與SSH金鑰.md"
+     見 docs/GitLab維運手冊/附錄/A_gitlab_runner帳號與SSH金鑰.md"
 
 # -----------------------------------------------------------------------------
 # rsync

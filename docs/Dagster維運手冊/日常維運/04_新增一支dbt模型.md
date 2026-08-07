@@ -268,7 +268,7 @@ CD 用 rsync 同步程式碼到 VM4 + 重新產生 manifest
 **合併之後請確認 CD pipeline 有跑成功再往下走。** 如果 pipeline 紅了,manifest 就沒更新,後面 Reload 也不會看到新模型。
 
 > 分支怎麼開、MR 怎麼寫、review 要看什麼,見
-> [GitLab維運手冊 · 01_開發人員_日常開發流程](../../../gitlab_workspace/GitLab維運手冊/日常維運/01_開發人員_日常開發流程.md)。
+> [GitLab維運手冊 · 01_開發人員_日常開發流程](../../GitLab維運手冊/日常維運/01_開發人員_日常開發流程.md)。
 
 > 需要手動產生 manifest 的情況(一般不會走到)請看本篇最後的
 > [附註 · 手動產生 manifest 與編譯 SQL](#附註--手動產生-manifest-與編譯-sql)。
@@ -474,7 +474,7 @@ Reload 之後到 **Catalog → 下游模型 → Lineage 分頁 → Upstream**,
 - CI/CD pipeline 掛了,但你急著先讓 Dagster 看到新模型
 - 你在 VM4 上直接改了檔案沒有走 git(**不建議**;下次 rsync 會被蓋掉,而且每日 hash
   對帳會在隔天把這台機器標成不一致並告警,見
-  [GitLab維運手冊 · 12_同步完整性稽核](../../../gitlab_workspace/GitLab維運手冊/進階調整/12_同步完整性稽核.md))
+  [GitLab維運手冊 · 12_同步完整性稽核](../../GitLab維運手冊/進階調整/12_同步完整性稽核.md))
 - 想在 push 之前先看編譯後的 SQL 長什麼樣
 
 ### 只更新 manifest

@@ -161,7 +161,7 @@ else
     fi
 
     if command -v bandit >/dev/null 2>&1; then
-        run_check "Python 資安掃描 (bandit)" bandit -q -c bandit.yaml -ll "${PY_FILES[@]}"
+        run_check "Python 資安掃描 (bandit)" bandit -q -c "${REPO_ROOT}/ci/bandit.yaml" -ll "${PY_FILES[@]}"
     else
         echo "⚠️  找不到 bandit，略過（CI 上會再跑一次）。"
     fi

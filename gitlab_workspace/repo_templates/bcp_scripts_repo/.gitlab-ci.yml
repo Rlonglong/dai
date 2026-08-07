@@ -6,7 +6,7 @@
 #   2. 部署目標是 VM1        /home/bcp_runner/scripts
 #   3. 有 requirements.txt   所以 SCA 直接掃它，不需要 DTRACK_IMAGE
 #
-# 檢查規則（.gitleaks.toml / .flake8 / bandit.yaml）與 ci/ 底下的腳本
+# 檢查規則（.gitleaks.toml / .flake8 / ci/bandit.yaml）與 ci/ 底下的腳本
 # 跟 dagster_workspace repo **完全相同**，直接複製過來即可。
 # 兩邊刻意保持一致，開發者換 repo 不用重學一套。
 # =============================================================================

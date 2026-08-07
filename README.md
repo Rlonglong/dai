@@ -59,7 +59,7 @@ title: 部署手冊
 > 建好之後的日常操作（怎麼改東西、怎麼上線、每天要看什麼）在
 > [`docs/`](./docs/README.md)：
 > - [Dagster 維運手冊](./docs/Dagster維運手冊/README.md) — 資料流程怎麼運作、怎麼改
-> - [GitLab 維運手冊](./gitlab_workspace/GitLab維運手冊/README.md) — 怎麼把改動安全送上正式機
+> - [GitLab 維運手冊](./docs/GitLab維運手冊/README.md) — 怎麼把改動安全送上正式機
 
 ## 提供檔案
 ```
@@ -416,7 +416,7 @@ docker exec infra-db psql -U "$(grep '^INFRA_DB_USER=' .env | cut -d= -f2)" -c '
 - `infra-db` 首次啟動時執行 `workspace/init-infra-db.sql`，會建立所有資料庫（keycloak、dtrack、superset、dagster、keycloak_access_db）。確保此 SQL 檔在啟動前已存在於正確路徑。**這個 SQL 只在資料目錄是空的時候會跑**，如果第一次啟動失敗，要先把 PostgreSQL 的資料目錄清掉再重來，否則改了 SQL 也不會生效。
 - `dagster-code` 必須先 healthy，`dagster-webserver` 和 `dagster-daemon` 才能啟動（compose 已設定 `depends_on` 健康依賴）。
 - `dagster-login`（OAuth2 Proxy，Dagster SSO 對外邊界）會持續重試連線 Keycloak，直到 Phase 2 的 Keycloak 啟動後才會轉為正常狀態，屬預期行為，不需要特別處理。
-- CD runner 已改到 VM3（跟 CI runner 同一台，見 Phase 3-5），VM4 不再需要 `gitlab-runner-cd`。改用 rsync 從 VM3 推送，VM4 只當接收端，上面不會有 `.git` 目錄、也不需要對 GitLab 的連線。理由見 [11_CD_rsync部署機制 · 第 8 節](./gitlab_workspace/GitLab維運手冊/進階調整/11_CD_rsync部署機制.md#8-為什麼是vm3-推而不是vm4-拉)。
+- CD runner 已改到 VM3（跟 CI runner 同一台，見 Phase 3-5），VM4 不再需要 `gitlab-runner-cd`。改用 rsync 從 VM3 推送，VM4 只當接收端，上面不會有 `.git` 目錄、也不需要對 GitLab 的連線。理由見 [11_CD_rsync部署機制 · 第 8 節](./docs/GitLab維運手冊/進階調整/11_CD_rsync部署機制.md#8-為什麼是vm3-推而不是vm4-拉)。
 - PostgreSQL 對外 Port 是 `5433`（非預設 5432），參數來自 `INFRA_DB_PORT=5433`。
 - 務必先完成 Phase 0-9 的目錄權限設定，否則 `dagster-code` / `dagster-webserver` / `dagster-daemon` 會因為 `Permission denied` 啟動失敗。
 
@@ -882,7 +882,7 @@ docker exec gitlab /usr/local/bin/gitleaks version    # 確認容器裡也跑得
 > 否則同一份 `.gitleaks.toml` 可能有規則語法不支援。
 
 > 同樣要處理「容器重建就消失」的問題，作法見
-> [GitLab維運手冊 · 10_CI_Pipeline設定詳解 · 3-5](./gitlab_workspace/GitLab維運手冊/進階調整/10_CI_Pipeline設定詳解.md#3-5-讓它在容器重建後還在)。
+> [GitLab維運手冊 · 10_CI_Pipeline設定詳解 · 3-5](./docs/GitLab維運手冊/進階調整/10_CI_Pipeline設定詳解.md#3-5-讓它在容器重建後還在)。
 
 ### 3-7. 驗證 Container Registry（與 GitLab 共用 domain）
 
@@ -908,7 +908,7 @@ docker push gitlab.dai.post.gov.tw:5050/<group>/<project>/myimage:latest
 > 這個 Phase 建立的是**日後所有程式碼變更的唯一路徑**。建完之後，
 > 沒有人應該再直接登入 VM1 / VM4 改檔案——改了會在隔天的雜湊對帳被抓出來。
 >
-> 建置細節與設計理由見 [GitLab 維運手冊](./gitlab_workspace/GitLab維運手冊/README.md)，
+> 建置細節與設計理由見 [GitLab 維運手冊](./docs/GitLab維運手冊/README.md)，
 > 這裡只列建置步驟。
 
 ### 要同步的兩個東西
@@ -1207,7 +1207,7 @@ git checkout main && git branch -D test/pre-receive-hook
 
 > ⚠️ **容器重建後 `/usr/local/bin/gitleaks` 與 hook 會消失。**
 > 長期作法是把三個檔案掛進 VM3 的 compose 檔（`:ro`），
-> 見 [10_CI_Pipeline設定詳解 · 3-5](./gitlab_workspace/GitLab維運手冊/進階調整/10_CI_Pipeline設定詳解.md#3-5-讓它在容器重建後還在)。
+> 見 [10_CI_Pipeline設定詳解 · 3-5](./docs/GitLab維運手冊/進階調整/10_CI_Pipeline設定詳解.md#3-5-讓它在容器重建後還在)。
 
 ---
 
@@ -1273,7 +1273,7 @@ Settings → **Merge requests → Merge request approvals** → Add approval rul
 > ＋ `CODEOWNERS`（高風險檔案要對的人審）
 >
 > 細節與驗證方式見
-> [04_帳號_權限_分支保護](./gitlab_workspace/GitLab維運手冊/日常維運/04_帳號_權限_分支保護.md#3-code-review-的強制性ee-版)。
+> [04_帳號_權限_分支保護](./docs/GitLab維運手冊/日常維運/04_帳號_權限_分支保護.md#3-code-review-的強制性ee-版)。
 
 **CI/CD Variables**（Settings → CI/CD → Variables，每個都要勾 Protected）：
 
@@ -1290,7 +1290,7 @@ Settings → **Merge requests → Merge request approvals** → Add approval rul
 > 私鑰是多行的，**一定要用 File 型別**，Variable 型別會壞掉且無法 mask。
 >
 > **`DEPLOY_PATH`、`SOURCE_DIR`、`POST_DEPLOY_CMD` 不用在這裡設**，
-> 它們寫死在 [`.gitlab-ci.yml`](./.gitlab-ci.yml) 的 job 裡（每個 repo、每個環境各自不同），
+> 它們寫死在 [`.gitlab-ci.yml`](.gitlab-ci.yml) 的 job 裡（每個 repo、每個環境各自不同），
 > 在這裡重設反而會蓋掉。
 >
 > **資料庫密碼不在這裡，也不該在這裡。** DB 連線走各機器上的 `.env`
@@ -1420,7 +1420,7 @@ ci/install_hooks.sh --check    # 確認
 需要的工具：`gitleaks`（**必要**）、`black` `flake8` `bandit` `sqlfluff` `pip-audit`（選用）。
 沒裝 gitleaks 的話 hook 會**擋下所有 commit/push**，而不是靜默放行。
 
-詳見 [03_本地環境設定與提交前檢查](./gitlab_workspace/GitLab維運手冊/日常維運/03_本地環境設定與提交前檢查.md)。
+詳見 [03_本地環境設定與提交前檢查](./docs/GitLab維運手冊/日常維運/03_本地環境設定與提交前檢查.md)。
 
 ---
 
@@ -1564,7 +1564,7 @@ GitLab UI → Run pipeline（main）→ 看 sca-dtrack job 的 log
 > 「為什麼我們不受這個 CVE 影響」是稽核一定會問的問題，半年後沒有人記得。
 
 完整說明見
-[15_D-Track定期弱掃](./gitlab_workspace/GitLab維運手冊/進階調整/15_D-Track定期弱掃.md)。
+[15_D-Track定期弱掃](./docs/GitLab維運手冊/進階調整/15_D-Track定期弱掃.md)。
 
 ---
 

@@ -168,7 +168,7 @@ python -m pip freeze > requirements.txt
 ## 5. 每季排程設定
 
 兩個 repo **各建兩個排程**（共四個）。這裡只講弱掃那個，
-雜湊對帳那個見 [GitLab維運手冊 · 12](../../../gitlab_workspace/GitLab維運手冊/進階調整/12_同步完整性稽核.md)。
+雜湊對帳那個見 [GitLab維運手冊 · 12](../../GitLab維運手冊/進階調整/12_同步完整性稽核.md)。
 
 ```
 GitLab UI → Build → Pipeline schedules → New schedule
@@ -216,5 +216,5 @@ Pipeline schedules → 該排程右邊的 ▶ (Play) 按鈕
 
 - 掃出東西怎麼處理 → [日常維運 · 04](../日常維運/04_弱掃紅燈與MR被卡住的解除流程.md)
 - 弱點報告怎麼看 → [日常維運 · 03](../日常維運/03_D-Track_看懂弱點報告.md)
-- CI pipeline 全貌 → [GitLab維運手冊 · 10_CI_Pipeline設定詳解](../../../gitlab_workspace/GitLab維運手冊/進階調整/10_CI_Pipeline設定詳解.md)
-- 弱掃設計理由 → [GitLab維運手冊 · 15_D-Track定期弱掃](../../../gitlab_workspace/GitLab維運手冊/進階調整/15_D-Track定期弱掃.md)
+- CI pipeline 全貌 → [GitLab維運手冊 · 10_CI_Pipeline設定詳解](../../GitLab維運手冊/進階調整/10_CI_Pipeline設定詳解.md)
+- 弱掃設計理由 → [GitLab維運手冊 · 15_D-Track定期弱掃](../../GitLab維運手冊/進階調整/15_D-Track定期弱掃.md)

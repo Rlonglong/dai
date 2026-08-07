@@ -65,8 +65,8 @@
 | 你想知道 | 看哪一份 |
 |---|---|
 | 這兩套系統怎麼裝起來的 | [部署手冊](../../README.md) — D-Track 在 Phase 3-4 / 4I，Superset 在 Phase 2-4 |
-| 弱掃 job 在 pipeline 裡怎麼跑的 | [GitLab維運手冊 · 15_D-Track定期弱掃](../../gitlab_workspace/GitLab維運手冊/進階調整/15_D-Track定期弱掃.md) |
-| MR、分支保護、code review 怎麼運作 | [GitLab維運手冊 · 04_帳號_權限_分支保護](../../gitlab_workspace/GitLab維運手冊/日常維運/04_帳號_權限_分支保護.md) |
+| 弱掃 job 在 pipeline 裡怎麼跑的 | [GitLab維運手冊 · 15_D-Track定期弱掃](../GitLab維運手冊/進階調整/15_D-Track定期弱掃.md) |
+| MR、分支保護、code review 怎麼運作 | [GitLab維運手冊 · 04_帳號_權限_分支保護](../GitLab維運手冊/日常維運/04_帳號_權限_分支保護.md) |
 | Superset 看的那些資料表怎麼來的 | [Dagster維運手冊](../Dagster維運手冊/README.md) |
 
 ---
