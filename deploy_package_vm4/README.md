@@ -26,18 +26,19 @@ deploy_package_vm4/
 │   └── seccomp-dagster.json        ← 三個 dagster 容器共用（compose 已引用）
 │
 └── workspace/
-    ├── init-infra-db.sql           ← infra-db 首次啟動時建立五個資料庫
+    ├── init-infra-db.sql           ← infra-db 首次啟動時建立四個資料庫與帳號
     ├── dagster_workspace/          ← Dagster 程式與 dbt 專案（DAGSTER_WORKSPACE）
     │                                  之後由 CD 從 VM3 rsync 覆蓋，見 Phase 4
     ├── dagster_data/               ← 落地檔工作目錄（DAGSTER_DATA_DIR，容器內 /data）
-    ├── rsyslog/                    ← Phase 6-2
+    ├── rsyslog/                    ← Phase 6
     │   ├── vm4-server.conf             集中接收端 → /etc/rsyslog.d/10-dai-server.conf
-    │   └── vm4-integrity-forward.conf  雜湊 manifest 轉發到 VM1
-    │                                   → /etc/rsyslog.d/25-dai-integrity-fwd.conf
-    ├── scripts/
-    │   └── log_hash.sh             ← 每日雜湊存證 → /opt/dai/scripts/（Phase 6-3）
+    │   ├── vm4-integrity-forward.conf  雜湊 manifest 轉發到 VM1
+    │   │                               → /etc/rsyslog.d/25-dai-integrity-fwd.conf
+    │   ├── log_hash.sh                 每日雜湊存證 → /opt/dai/scripts/（Phase 6-3）
+    │   └── dai_log_disk_alert.py       磁碟用量告警 → /usr/local/bin/dai_disk_alert.py
+    │                                   （需另外設 SMTP 密碼檔與收件人，見檔頭）
     └── logrotate/
-        └── dai                     ← → /etc/logrotate.d/dai（Phase 6-4）
+        └── dai_logrotate           ← → /etc/logrotate.d/dai（Phase 6-4）
 ```
 
 ---
@@ -50,7 +51,9 @@ cd /data/deploy
 # 1. 建 .env
 cp .env.example .env && vim .env && chmod 600 .env
 
-# 2. init-infra-db.sql 裡的密碼要跟 VM3／VM5 的 .env 對得起來
+# 2. init-infra-db.sql 裡的帳號密碼要跟 VM3／VM5 的 .env 對得起來
+#    目前是 kc_user/kc_pass、dt_user/dt_pass、superset_user/Superset_2026!、
+#    keycloak_access_user/Keycloak_access_2026!，正式環境請全部換成強密碼
 vim workspace/init-infra-db.sql
 
 # 3. Dagster 容器是 UID 10001，掛載目錄要先給它

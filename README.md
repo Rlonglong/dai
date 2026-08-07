@@ -636,11 +636,11 @@ docker compose up -d dagster-login dagster-code dagster-webserver dagster-daemon
 ```bash
 docker compose ps                                  # 五個服務都在，infra-db 是 (healthy)
 docker exec infra-db psql -U "$(grep '^DB_USER=' .env | cut -d= -f2)" -c '\l'
-# 應列出 keycloak / keycloak_access_db / dtrack / superset_db / dagster
+# 應列出 keycloak / keycloak_access_db / dtrack / superset_db
 ```
 
 **注意事項：**
-- `infra-db` 首次啟動時執行 `workspace/init-infra-db.sql`，會建立所有資料庫（keycloak、keycloak_access_db、dtrack、superset_db、dagster）與各自的帳號。**這個 SQL 只在資料目錄是空的時候會跑**，如果第一次啟動失敗，要先把資料清掉再重來，否則改了 SQL 也不會生效：
+- `infra-db` 首次啟動時執行 `workspace/init-infra-db.sql`，會建立四個資料庫（keycloak、dtrack、superset_db、keycloak_access_db）與各自獨立的帳號。**Dagster 不在裡面**——它用的是 `dagster_home` 底下的 SQLite，不需要 PostgreSQL。**這個 SQL 只在資料目錄是空的時候會跑**，如果第一次啟動失敗，要先把資料清掉再重來，否則改了 SQL 也不會生效：
   ```bash
   docker compose down
   docker volume rm "$(basename "$PWD")_infra-db-data"
@@ -2392,14 +2392,15 @@ sudo systemctl restart systemd-journald
 
 > **命名一律用 `dai`**：設定檔名、目錄、syslog tag、hash 腳本路徑
 > 全部是 `dai/*`、`/var/log/dai`、`/opt/dai`。
-> 部署包裡的 `workspace/rsyslog/*.conf` 與 `workspace/scripts/log_hash.sh`
+> 部署包裡的 `workspace/rsyslog/*.conf`、`workspace/rsyslog/log_hash.sh`
+> 與 `workspace/logrotate/dai_logrotate`
 > 已經是這個命名，直接照下面的步驟做即可。
 
 **VM4（集中接收端）：**
 ```bash
 # 在 VM4，已 cd 到部署根目錄 /data/deploy
 
-# 建立 log 儲存目錄
+# 建立 log 儲存目錄（實際落地在資料碟 /data 上）
 sudo mkdir -p /data/log/dai
 sudo chown root:dai_admin /data/log/dai
 sudo chmod 750 /data/log/dai
@@ -2408,6 +2409,17 @@ sudo mkdir -p /data/log/dai-integrity
 sudo chown root:dai_admin /data/log/dai-integrity
 sudo chmod 750 /data/log/dai-integrity
 
+# ★ 綁到 /var/log 底下 ★ 跟 VM1/VM3/VM5 一樣的作法，理由見下方說明
+sudo mkdir -p /var/log/dai /var/log/dai-integrity
+sudo mount --bind /data/log/dai            /var/log/dai
+sudo mount --bind /data/log/dai-integrity  /var/log/dai-integrity
+sudo restorecon -Rv /var/log/dai /var/log/dai-integrity
+
+# 寫進 fstab，否則重開機後會寫到本機磁碟且不會有任何錯誤訊息
+echo "/data/log/dai           /var/log/dai           none bind 0 0" | sudo tee -a /etc/fstab
+echo "/data/log/dai-integrity /var/log/dai-integrity none bind 0 0" | sudo tee -a /etc/fstab
+sudo mount -a && findmnt /var/log/dai
+
 # 部署設定
 sudo cp ./workspace/rsyslog/vm4-server.conf \
   /etc/rsyslog.d/10-dai-server.conf
@@ -2415,14 +2427,23 @@ sudo cp ./workspace/rsyslog/vm4-integrity-forward.conf \
   /etc/rsyslog.d/25-dai-integrity-fwd.conf
 
 # 轉發雜湊 manifest 到 VM1，要填 VM1 的實際 IP
-sudo sed -i "s/__VM1_IP__/<VM1實際IP>/g" /etc/rsyslog.d/25-dai-integrity-fwd.conf
+# （設定檔裡目前寫死的是 10.10.159.74，換成正式環境的值）
+sudo sed -i "s/10\.10\.159\.74/<VM1實際IP>/g" /etc/rsyslog.d/25-dai-integrity-fwd.conf
 
 # 驗證語法後重啟
 sudo rsyslogd -N1 && sudo systemctl restart rsyslog
-
-# 確認佔位字串都換掉了（沒有輸出才對）
-grep -rn '__VM._IP__' /etc/rsyslog.d/
 ```
+
+> ⚠️ **VM4 的 bind mount 不能省。** 兩支程式看的是不同路徑：
+>
+> | 誰 | 用哪個路徑 |
+> |---|---|
+> | `vm4-server.conf`（rsyslog 落地） | **`/data/log/dai/`** |
+> | `log_hash.sh`（`LOG_DIR`） | **`/var/log/dai/`** |
+> | `dai_logrotate`（輪替樣式） | **`/var/log/dai/*/*/*log`** |
+>
+> 沒綁的話 rsyslog 照樣寫得進 `/data`，但**雜湊對帳每天都會算出 0 個檔案、
+> logrotate 也永遠不會輪替**，而且兩者都不會報錯。
 
 **VM1 / VM3 / VM5（轉發端）：**
 ```bash
@@ -2500,7 +2521,7 @@ sudo rsyslogd -N1 && sudo systemctl restart rsyslog
 ```bash
 # 在 VM4，已 cd 到部署根目錄
 sudo mkdir -p /opt/dai/scripts
-sudo cp ./workspace/scripts/log_hash.sh /opt/dai/scripts/
+sudo cp ./workspace/rsyslog/log_hash.sh /opt/dai/scripts/
 sudo chmod 755 /opt/dai/scripts/log_hash.sh
 
 sudo mkdir -p /var/log/dai-integrity
@@ -2520,7 +2541,7 @@ sudo /opt/dai/scripts/log_hash.sh && ls -l /var/log/dai-integrity/
 ### 6-4. 部署 logrotate（VM4）
 
 ```bash
-sudo cp ./workspace/logrotate/dai /etc/logrotate.d/dai
+sudo cp ./workspace/logrotate/dai_logrotate /etc/logrotate.d/dai
 
 # 驗證設定檔語法（-d 是 dry-run，不會真的輪替）
 sudo logrotate -d /etc/logrotate.d/dai
@@ -2534,7 +2555,7 @@ logger -t 'dai/verify-vm3' 'CROSS_VM_TEST'
 
 # 在 VM4 確認是否收到（等 3 秒）
 sleep 3
-sudo find /data/log/dai/vm3-*/ -name '*.log' -exec sudo tail -1 {} \;
+sudo find /data/log/dai/vm3/ -name '*.log' -exec sudo tail -1 {} \;
 # 應輸出：DAI|<時間>|vm3|verify-vm3|NOTICE|CROSS_VM_TEST
 ```
 
