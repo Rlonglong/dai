@@ -16,7 +16,7 @@ title: 部署手冊
 
 | VM | 角色 | 正式部署時更新 |
 |----|------|--------------|
-| VM1 | BCP Pipeline（SQL Server 資料搬移）| 更新 VM1 部署根目錄的 `.env` |
+| VM1 | BCP Pipeline（SQL Server 資料搬移）**★不跑容器，直接用 host 的 Python★** | 更新 `/home/bcp_runner/.env` |
 | VM3 | GitLab + Container Registry + Dependency-Track + Nginx + **GitLab Runner CI/CD** | 更新 VM3 部署根目錄的 `.env` |
 | VM4 | infra-db (PostgreSQL) + Dagster | 更新 VM4 部署根目錄的 `.env` |
 | VM5 | Keycloak（含 LDAP 聯邦）+ Nginx + Superset | 更新 VM5 部署根目錄的 `.env` |
@@ -75,16 +75,23 @@ deploy_package_vm5.tar.gz
 
 | | VM1 | VM3 | VM4 | VM5 |
 |---|---|---|---|---|
-| `docker-compose.yml` | ✅ | ✅ | ✅ | ✅ |
-| `.env` | ✅ | ✅ | ✅ | ✅ |
+| `docker-compose.yml` | **—** | ✅ | ✅ | ✅ |
+| `.env` | **—**（見下） | ✅ | ✅ | ✅ |
 | `certs/` | ✅ | ✅ | ✅ | ✅ |
 | `workspace/`（該 VM 用到的部分） | ✅ | ✅ | ✅ | ✅ |
-| `secure_report/` | ✅ | ✅ | ✅ | ✅ |
-| `gitlab_workspace/`（hook、post-deploy、repo 範本） | — | ✅ | — | — |
+| `secure_report/` | — | ✅ | ✅ | ✅ |
+| `gitlab_workspace/`（hook、post-deploy、repo 素材） | — | ✅ | — | — |
 | `dagster_workspace/`（Dagster 程式與 dbt 專案） | — | — | ✅ | — |
 | `python_env/`（離線 wheel + python3.11 rpm） | ✅ | — | — | — |
+| ODBC 驅動 rpm（`msodbcsql18`、`unixODBC`） | ✅ | — | — | — |
 | `gitleaks_*_linux_x64.tar.gz` | — | ✅ | — | — |
-| Docker 與 OS 套件的 rpm | ✅ | ✅ | ✅ | ✅ |
+| Docker 的 rpm | **—** | ✅ | ✅ | ✅ |
+| OS 套件的 rpm（`acl`、`rsync`、`rsyslog`…） | ✅ | ✅ | ✅ | ✅ |
+
+> 🚨 **VM1 不跑容器**：它的 BCP 腳本是由 Dagster 透過 SSH 叫起來、
+> **直接跑在 host 的 Python 3.11 venv 上**。
+> 所以 VM1 的包**沒有 `docker-compose.yml`、沒有 Docker 的 rpm**，
+> 連線資訊放在 `/home/bcp_runner/.env`（Phase 5-4 人工建立）而不是部署根目錄。
 
 > 📌 **`gitlab_workspace/post_deploy/` 的兩支腳本雖然裝在 VM1 / VM4，
 > 但只放在 VM3 的包裡**，部署時由 VM3 `scp` 過去（見 Phase 4B）。
@@ -150,10 +157,23 @@ docker compose up -d <服務名>
 
 | VM | 部署根目錄 | 說明 |
 |----|-----------|------|
-| VM1 | `/run/media/root/D/deploy` | 資料碟掛在 `/run/media/root/D` |
-| VM3 | `/run/media/root/D/deploy` | 同上 |
+| VM3 | `/run/media/root/D/deploy` | 資料碟掛在 `/run/media/root/D` |
 | VM4 | `/data/deploy` | 較早申請的機器，資料碟掛在 `/data` |
-| VM5 | `/run/media/root/D/deploy` | 同上 |
+| VM5 | `/run/media/root/D/deploy` | 資料碟掛在 `/run/media/root/D` |
+
+> ⚠️ **VM1 不在這張表裡，因為它不跑容器。**
+> VM1 沒有 `docker-compose.yml`、也沒有部署根目錄的 `.env`，
+> 它的東西散在幾個固定位置：
+>
+> | 位置 | 內容 |
+> |---|---|
+> | `/home/bcp_runner/scripts/` | 執行腳本（由 CD 從 VM3 rsync 過來） |
+> | `/home/bcp_runner/.env` | 連線資訊與金鑰（人工建立，不進版控、不被 rsync 動到） |
+> | `/run/media/root/D/python_env/dai_venv/` | Python 3.11 虛擬環境 |
+> | `/run/media/root/D/python_env/req/` | 離線安裝用的 wheel |
+> | `/run/media/root/D/data/` | 落地檔工作目錄 |
+>
+> 詳見 Phase 5。
 
 > 📌 **`deploy` 上面那一層是磁碟掛載點，會因機器而異。**
 > VM1 / VM3 / VM5 是同一批申請的，資料碟都掛在 `/run/media/root/D`；
@@ -167,7 +187,10 @@ docker compose up -d <服務名>
 
 ## Phase 0：所有 VM 基礎準備
 
-### 0-1. 安裝 Docker
+### 0-1. 安裝 Docker（**VM3 / VM4 / VM5**）
+
+> 🚨 **VM1 跳過這一節。** VM1 不跑容器，不需要 Docker。
+> VM1 從 [0-3](#0-3-安裝作業系統套件) 開始做。
 
 請先將安裝檔傳入正式環境，以進行離線安裝，確定以下四種檔案（請自行帶入欲安裝的版本號）已在正式環境。
 以下指令都需要 root 權限（直接用 root 或每行加 `sudo`）。
@@ -191,7 +214,7 @@ docker compose version      # ★ 要有這個，compose plugin 才有裝到
 > `docker compose`（有空格）是 compose plugin，`docker-compose`（有橫線）是舊的獨立執行檔。
 > 本文一律用前者，舊版指令不保證行為相同。
 
-### 0-2. 啟動 Docker
+### 0-2. 啟動 Docker（**VM3 / VM4 / VM5**）
 ```bash
 systemctl start docker      # 啟動 Docker 服務
 systemctl enable docker     # 開機時自動啟動 Docker 服務
@@ -269,7 +292,7 @@ dnf localinstall msodbcsql18-*.rpm unixODBC-*.rpm
 odbcinst -q -d      # 應列出 [ODBC Driver 18 for SQL Server]
 ```
 
-### 0-4. 時間同步（chrony）★四台 VM 都要做★
+### 0-4. 時間同步（chrony）★四台 VM 都要做，含 VM1★
 
 四台機器的時鐘不一致，會造成三個實際問題：
 
@@ -393,6 +416,15 @@ mkdir -p /data/deploy
 tar -xzf /tmp/deploy_package_vm4.tar.gz -C /data/deploy --strip-components=1
 ```
 
+**VM1 的內容不一樣**（沒有 compose 也沒有 `.env`，主要是離線安裝素材）：
+```bash
+mkdir -p /run/media/root/D/deploy
+tar -xzf /tmp/deploy_package_vm1.tar.gz -C /run/media/root/D/deploy --strip-components=1
+
+# 解開後應該看到：python_env/（wheel 與 rpm）、workspace/（rsyslog 設定等）、certs/
+ls -la /run/media/root/D/deploy
+```
+
 **解開後確認結構正確：**
 ```bash
 cd <部署根目錄>
@@ -405,21 +437,23 @@ ls -la          # 應該看到 docker-compose.yml、.env、certs/、workspace/
 **每台 VM 上，將 `.env` 裡的 IP 換成正式環境實際 IP：**
 
 ```bash
-# 四台 VM 都在自己的部署根目錄執行，指令完全相同
+# VM3 / VM4 / VM5 在自己的部署根目錄執行，指令完全相同
 cd <部署根目錄>
 
 sed -i "s/VM3_IP=.*/VM3_IP=<VM3實際IP>/" .env
 sed -i "s/VM4_IP=.*/VM4_IP=<VM4實際IP>/" .env
 sed -i "s/VM5_IP=.*/VM5_IP=<VM5實際IP>/" .env
-# VM1 的 .env 另外還有 MSSQL_* 等連線資訊，見 Phase 5-3
 ```
+
+> **VM1 沒有這個 `.env`。** 它的連線資訊在 `/home/bcp_runner/.env`，
+> 在 Phase 5-4 才建立。
 
 改完確認：
 ```bash
 grep -E '^VM[0-9]_IP=' .env
 ```
 
-### 0-7. 確認 compose 檔可以正確解析
+### 0-7. 確認 compose 檔可以正確解析（**VM3 / VM4 / VM5**）
 
 改完 `.env`、動過 compose 檔的相對路徑之後，**先驗證再啟動**。
 這一步會把 `.env` 的變數代進去、把所有相對路徑展開成絕對路徑，
@@ -456,7 +490,8 @@ docker compose config | grep -E 'source:|device:'
 
 ### 0-9. 準備 TLS 憑證
 
-憑證放在部署根目錄的 `certs/` 底下（**四台 VM 都要有**，各服務都需要驗證彼此的 TLS）：
+憑證放在部署根目錄的 `certs/` 底下（**四台 VM 都要有**，各服務都需要驗證彼此的 TLS；
+VM1 沒有容器，但 host 仍要信任這張 CA 才連得上 GitLab 等服務）：
 
 ```
 <部署根目錄>/certs/
@@ -483,7 +518,8 @@ chmod 600 dai_202606.key
 chmod 644 GRCA3.crt GCA3.crt dai_202606.crt fullchain_202606.crt
 ```
 
-憑證準備好之後，要把 CA 根憑證放進 VM 的信任清單裡面（**四台 VM 都要做**）：
+憑證準備好之後，要把 CA 根憑證放進 VM 的信任清單裡面（**四台 VM 都要做**；
+VM1 不用 `systemctl restart docker` 那一行）：
 ```bash
 cp <部署根目錄>/certs/GRCA3.crt /etc/pki/ca-trust/source/anchors/
 update-ca-trust extract
@@ -512,15 +548,24 @@ chown -R 10001:10001 ./workspace/dagster_home
 
 > 實際目錄名以 `.env` 裡的路徑變數為準，先用 `grep -i dagster .env` 確認。
 
-### 0-11. BCP Pipeline 資料目錄權限（VM1）
+### 0-11. BCP Pipeline 資料目錄（VM1）
 
-`dai/bcp_pipeline` 在 secure compose 中明確以 **UID:GID 1000:1000** 執行，需確保 `workspace/data` 目錄擁有者一致：
+VM1 的腳本**不跑在容器裡**，是由 Dagster 透過 SSH 以 `bcp_runner` 身分執行，
+所以資料目錄的擁有者就是 `bcp_runner`：
 
 ```bash
-# 在 VM1 執行
-cd /run/media/root/D/deploy
-chown -R 1000:1000 ./workspace/data
+# 在 VM1，以 root
+mkdir -p /run/media/root/D/data
+chown -R bcp_runner:bcp_runner /run/media/root/D/data
+chmod 750 /run/media/root/D/data
 ```
+
+> `bcp_runner` 帳號在 Phase 5-1 建立。這一步可以等到那時候一起做，
+> 或先建帳號再回來執行。
+>
+> ⚠️ **這個目錄會有明碼的個資與交易明細。**
+> 權限 750、擁有者 `bcp_runner`，不要給 world-readable。
+> ACL 的部分（讓 `gitlab_runner` 寫得進 `scripts/`）見 Phase 4A。
 
 ### 0-12. 初始設定檔權限（VM5）
 
@@ -1262,7 +1307,7 @@ su - gitlab_runner -c "sudo -n /bin/chown root /etc/shadow" ; echo "exit=$?（�
 |---|---|
 | `chown -R 10001:10001` | `chown -R bcp_runner:bcp_runner` |
 | 目錄 750 / 檔案 640、`.env` 收到 600 | 同左 |
-| `dbt parse` 重產 `manifest.json` | `python -m compileall` 用 VM1 實際的 Python 版本驗語法 |
+| `dbt parse` 重產 `manifest.json` | `python -m compileall` 用 VM1 venv 裡的 Python 3.11 驗語法（不是容器） |
 
 ---
 
@@ -1282,7 +1327,7 @@ git remote add origin https://gitlab.dai.post.gov.tw/<group>/dagster-workspace.g
 git push -u origin main
 
 # bcp-scripts：從 VM1 現有的檔案初始化
-# 步驟見 gitlab_workspace/repo_templates/bcp_scripts_repo/README.md
+# 步驟見 docs/GitLab維運手冊/附錄/B_bcp-scripts_repo建立步驟.md
 ```
 
 > 📌 **這一步一定要排在 4E（分支保護）之前。**
@@ -1374,8 +1419,7 @@ git checkout main && git branch -D test/pre-receive-hook
 ### 4E. 分支保護、Variables、環境隔離
 
 > ⚠️ **本節依 GitLab CE（免費版）撰寫。**
-> Merge Request Approvals（強制核准人數）與 CODEOWNERS 的**強制**效果
-> 都是 Premium 以上才有的功能，CE 沒有。
+> Merge Request Approvals（強制核准人數）是 Premium 以上才有的功能，CE 沒有。
 > 本節寫的是 **CE 實際做得到的組合**，以及 CE 做不到、必須靠團隊規定補的部分。
 
 **正式與測試共用同一個 GitLab，靠三件事隔開**（缺一不可）：
@@ -1471,33 +1515,45 @@ git reset --hard HEAD~1
 | 討論沒解決不能合併 | ✅ 能 | 4E-2 的 `All threads must be resolved` |
 | **一定要有人核准才能合併** | ❌ **不能** | 只能靠團隊規定 + 事後稽核（見下） |
 | **作者不能自己核准自己** | ❌ 不能 | 同上 |
-| **CODEOWNERS 強制指定審查者** | ❌ 不能 | CODEOWNERS 檔案在 CE 沒有作用 |
 
-**CE 底下的替代做法（三選一或併用）：**
+#### 我們採用的做法：`Allowed to merge = Maintainers`
 
-1. **團隊規定 + 事後稽核**（成本最低）
-   - 規定：`main` 的每個 MR 都要有另一個人在討論串留下 `LGTM` 才能按 Merge
-   - 靠 `All threads must be resolved` 讓討論串一定要處理過
-   - 每月抽查 MR 清單，看有沒有「開了就自己合」的
-   - GitLab UI：該 project → **Merge requests** → 篩選 `Merged`，看 Approvers/留言
+**這是全篇統一的做法，不是選項之一。**
 
-2. **把 Merge 權限收在少數人手上**
-   - `Allowed to merge = Maintainers`，開發者一律是 Developer 角色
-   - Developer 只能開 MR、不能按 Merge → **實質上就是要另一個人（Maintainer）動手**
-   - 代價：Maintainer 會變瓶頸，人少的時候會卡
-   - **這是 CE 底下最接近「強制 code review」的做法，建議採用**
+```
+開發人員   = Developer 角色  → 只能開 MR，Merge 鍵是灰的、按不下去
+系統負責人 = Maintainer 角色 → 只有他們按得下 Merge
+```
 
-3. **升級到 Premium**
-   - 才會出現 `Settings → Merge requests → Merge request approvals` 區塊
-   - 升級後要補設定：Approvals required ≥ 1、Prevent approval by author、
-     Prevent approvals by users who add commits、
-     Prevent editing approval rules in merge requests、
-     Remove all approvals when commits are added
+效果上就是「**作者自己合不了，一定要另一個人動手**」——
+CE 底下最接近強制 code review 的做法。
 
-> 📌 **CODEOWNERS 檔案在 CE 可以放，但只是「文件」。**
-> 它不會擋合併、不會自動指定審查者。
-> 如果要放，把它當成「這些檔案改動時請找誰看」的對照表，
-> 並在 MR 樣板裡提醒，不要以為它有強制力。
+搭配 4E-1 的 `Allowed to push and merge = No one`（誰都不能直接 push），
+與 4E-2 的兩個 Merge check，四層合起來：
+
+| 層 | 擋掉什麼 | 系統強制？ |
+|---|---|---|
+| `Allowed to push and merge = No one` | 完全不可能繞過 MR | ✅ |
+| `Pipelines must succeed` | lint／資安掃描沒過就合不了 | ✅ |
+| `All threads must be resolved` | reviewer 的問題必須被回應 | ✅ |
+| **`Allowed to merge = Maintainers`** | **作者自己合不了** | ✅ |
+
+**配套規定**（系統擋不住的部分）：
+
+| 規定 | 為什麼 |
+|---|---|
+| Maintainer 至少 2 人 | 一個人請假就全部卡住 |
+| Maintainer 自己的 MR，由另一位 Maintainer 合併 | 系統不會擋，靠自律 |
+| reviewer 要在 MR 開一個 thread 寫意見 | 靠 `All threads must be resolved` 保證它被處理過，也留下審查痕跡 |
+| 每月抽查 `Merge requests → 篩選 Merged` | 看有沒有「開了就自己合」「零討論」的 MR |
+
+> **升級到 Premium 之後**才會出現
+> `Settings → Merge requests → Merge request approvals` 區塊，
+> 屆時補上：Approvals required ≥ 1、Prevent approval by author、
+> Prevent approvals by users who add commits、
+> Prevent editing approval rules in merge requests、
+> Remove all approvals when commits are added。
+> 在那之前，`Allowed to merge = Maintainers` 就是我們的把關方式。
 
 #### 4E-4. CI/CD Variables
 
@@ -1548,7 +1604,7 @@ Settings → CI/CD → Variables → Add variable
 > 私鑰是多行的，**一定要用 File 型別**，Variable 型別會壞掉且無法 mask。
 >
 > **`DEPLOY_PATH`、`SOURCE_DIR`、`POST_DEPLOY_CMD` 不用在這裡設**，
-> 它們寫死在 [`.gitlab-ci.yml`](.gitlab-ci.yml) 的 job 裡（每個 repo、每個環境各自不同），
+> 它們寫死在 [`.gitlab-ci.yml`](./cicd_template/dagster-workspace/.gitlab-ci.yml) 的 job 裡（每個 repo、每個環境各自不同），
 > 在這裡重設反而會蓋掉。
 >
 > **資料庫密碼不在這裡，也不該在這裡。** DB 連線走各機器上的 `.env`
@@ -1657,14 +1713,15 @@ ls -l /data/deploy/workspace/dagster_workspace/dbt_project/profiles.yml
 ```
 
 這兩個檔案是 4C 之前人工建立的、不進版控，能在 `rsync --delete` 之下活下來
-靠的是 [`deploy_exclude.txt`](./deploy_exclude.txt)：
+靠的是 [`deploy_exclude.txt`](./cicd_template/dagster-workspace/deploy_exclude.txt)：
 
 > **rsync 的 `--delete` 不會刪掉被 `--exclude` 排除的檔案**
 > （會刪的是 `--delete-excluded`，我們刻意不用）。
 > 所以那份清單同時是「不傳清單」和「刪除保護清單」。
 > **日後有人在那份清單裡漏掉一行，下一次部署就會洗掉正式機的帳密** ——
-> 所以這個檔案的每一次改動都必須有人實際看過——CE 沒辦法用 CODEOWNERS 強制，
-> 只能靠 4E-3 的「Merge 權限收在 Maintainer 手上」與 review 規定。
+> 所以這個檔案的每一次改動都必須有人實際看過——
+> 靠的是 4E-3 的「`Allowed to merge = Maintainers`」：Maintainer 按 Merge 之前
+> 看到 MR 動到 `deploy_exclude.txt`，就要停下來確認。
 
 **最後到 Dagster UI 做一次 Reload definitions**，確認新的 manifest 被載入。
 
@@ -1886,6 +1943,29 @@ GitLab UI → Run pipeline（main）→ 看 sca-dtrack job 的 log
 ---
 
 ## Phase 5：VM1 — BCP Pipeline
+
+> 🚨 **VM1 跟其他三台不一樣：它不跑容器。**
+>
+> | | VM3 / VM4 / VM5 | **VM1** |
+> |---|---|---|
+> | 服務怎麼跑 | `docker compose up -d` | **Dagster 透過 SSH 叫 host 上的 Python 腳本** |
+> | 套件在哪 | 烘焙在映像檔裡 | **host 的 venv**：`/run/media/root/D/python_env/dai_venv` |
+> | 連線設定在哪 | 部署根目錄的 `.env` | **`/home/bcp_runner/.env`** |
+> | 程式碼怎麼更新 | 換映像檔 | CD 從 VM3 rsync 到 `/home/bcp_runner/scripts/` |
+>
+> 所以這個 Phase 沒有任何 `docker` 指令。
+
+**本 Phase 的順序**：
+
+```
+5-1  建帳號與 SSH 通道（VM4 → VM1）
+5-2  建 Python venv、離線裝套件
+5-4  填 /home/bcp_runner/.env      ← 先填才測得了
+5-3  驗證 Python 環境與資料庫連線   ← 回頭做這一步
+5-5  產生加密金鑰
+5-6  工作目錄權限
+```
+
 ### 5.1 建立 VM4 到 VM1 SSH 免輸入密碼登陸
 
 > 📌 **這條通道跟 Phase 4A 的 `gitlab_runner` 是兩回事，不要搞混、也不要共用金鑰：**
@@ -2011,29 +2091,71 @@ wheel             0.38.4
 ```
 
 
-### 5.3 建立 VM 1 連線設定
+### 5.3 驗證 Python 環境與資料庫連線
+
+> 🚨 **VM1 沒有容器，所以這裡不是 `docker compose run`。**
+> 所有東西都直接跑在 host 的 venv 上。
+
+**先確認套件都裝好了：**
+
 ```bash
-# 在 VM1 執行
-cd /run/media/root/D/deploy
+# 在 VM1，以 bcp_runner（或會執行腳本的那個身分）
+source /run/media/root/D/python_env/dai_venv/bin/activate
 
-# 先填入 MS SQL Server 連線資訊
-vim .env
-# 填入 MSSQL_HOST, MSSQL_DB, MSSQL_USER, MSSQL_PASSWORD
-
-# 執行測試
-docker compose run --rm bcp_pipeline
-
-# 預期輸出包含：
-# All required packages OK
-# Test PASSED
+python - <<'EOF'
+import importlib, sys
+need = ["pandas", "numpy", "openpyxl", "pymssql", "pyodbc",
+        "cryptography", "dotenv", "dagster_pipes"]
+missing = [m for m in need if not importlib.util.find_spec(m)]
+print("缺少套件：", missing if missing else "無")
+sys.exit(1 if missing else 0)
+EOF
+# 預期：缺少套件： 無
 ```
 
-> 執行前務必完成 Phase 0-11 的 `workspace/data` 目錄權限設定（UID:GID 1000:1000），否則容器內非 root 使用者無法存取掛載的資料目錄。
->
-> ⚠️ `.env` 裡有資料庫密碼，**權限要收到 600**：
-> ```bash
-> chmod 600 /run/media/root/D/deploy/.env
-> ```
+**確認 ODBC 驅動掛得起來：**
+
+```bash
+odbcinst -q -d                 # 應列出 [ODBC Driver 18 for SQL Server]
+python -c "import pyodbc; print(pyodbc.drivers())"
+# 應該看到 'ODBC Driver 18 for SQL Server'
+```
+
+**實際連一次資料庫**（`.env` 要先填好，見 5-4）：
+
+```bash
+set -a; . /home/bcp_runner/.env; set +a
+
+python - <<'EOF'
+import os, pymssql
+conn = pymssql.connect(server=os.environ["DB_SERVER"],
+                       user=os.environ["DB_USER"],
+                       password=os.environ["DB_PASS"],
+                       database=os.environ["DB_NAME"],
+                       timeout=10, login_timeout=10)
+cur = conn.cursor(); cur.execute("SELECT @@VERSION")
+print("連線成功：", cur.fetchone()[0][:60])
+conn.close()
+EOF
+```
+
+看到「連線成功」就代表 Python 環境、ODBC、網路、帳密四件事都對了。
+
+**連不上的排查順序**：
+
+```bash
+# 1. 網路通不通
+cat < /dev/null > /dev/tcp/<DB_SERVER>/1433 && echo "1433 可連線"
+#    不通 → 防火牆要開 VM1 → SQL Server:1433
+
+# 2. 主機名稱解析得到嗎
+getent hosts <DB_SERVER>
+#    解不到 → 改填 IP，或請 IT 加進公司 DNS
+
+# 3. 帳密對不對 → 用資料庫端的工具直接測那組帳密
+```
+
+> 這一步要放在 5-4 填完 `.env` 之後做；先看 5-4 也可以。
 
 
 ### 5.4 填入 VM1 連線資訊
@@ -2087,12 +2209,35 @@ ls -l /home/bcp_runner/.env      # 應為 -rw------- bcp_runner bcp_runner
 > 這是刻意的：GitLab 被入侵也拿不到這些帳密。
 
 ### 5.6 賦予 bcp_runner 工作目錄權限
-未來會以 bcp_runner 執行程式，因賦予它工作目錄使用權限，應確保正常情況 bcp_runner 不被任何人有權操作。
+
+程式以 `bcp_runner` 執行，所以工作目錄的擁有者就是它
+（**不是**某個容器 UID —— VM1 沒有容器）：
+
 ```bash
+# 在 VM1，以 root
 mkdir -p /run/media/root/D/data
-setfacl -R -m u:bcp_runner:rwx /run/media/root/D/data
-setfacl -d -m u:bcp_runner:rwx /run/media/root/D/data
+chown -R bcp_runner:bcp_runner /run/media/root/D/data
+chmod 750 /run/media/root/D/data
 ```
+
+腳本目錄要讓 CD 的 `gitlab_runner` 寫得進去，同時執行身分還是 `bcp_runner`，
+兩個不同帳號共用一個目錄靠 ACL（這一段在 Phase 4A 已經做過，這裡確認即可）：
+
+```bash
+getfacl /home/bcp_runner/scripts | grep gitlab_runner
+# 應該看到 user:gitlab_runner:rwx 與 default:user:gitlab_runner:rwx
+```
+
+**驗證整體權限**：
+
+```bash
+ls -ld /run/media/root/D/data          # drwxr-x--- bcp_runner bcp_runner
+ls -l  /home/bcp_runner/.env           # -rw------- bcp_runner bcp_runner
+ls -ld /home/bcp_runner/scripts        # 有 + 號代表有 ACL
+```
+
+> ⚠️ `/run/media/root/D/data` 會有明碼個資與交易明細，
+> **權限不要放寬到 755**。
 
 ---
 

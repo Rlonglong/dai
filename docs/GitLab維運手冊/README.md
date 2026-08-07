@@ -49,6 +49,8 @@ Dagster 手冊講「**改什麼**」，這套手冊講「**怎麼把改動安全
 | 文件 | 內容 |
 |---|---|
 | [A · gitlab_runner 帳號與 SSH 金鑰](./附錄/A_gitlab_runner帳號與SSH金鑰.md) | 三台 VM 的帳號建立、免密碼登入、金鑰輪替 |
+| [B · bcp-scripts repo 建立步驟](./附錄/B_bcp-scripts_repo建立步驟.md) | 當初怎麼從 VM1 現有檔案初始化那個 repo |
+| [C · 新 repo 納入 CI/CD](./附錄/C_新repo納入CICD.md) | **又要開一個新 repo 時照這個做** |
 
 ---
 

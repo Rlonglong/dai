@@ -1,0 +1,144 @@
+# =============================================================================
+# DAI · dagster_workspace repo
+# =============================================================================
+# 這份檔案決定「什麼進版控」。
+# 另有 deploy_exclude.txt 決定「rsync 不傳、也不刪」什麼 —— 兩者是不同的事，
+# 新增一種執行期產物時請兩份都加。
+# 對照說明：docs/GitLab維運手冊/進階調整/11_CD_rsync部署機制.md
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 1. 機密（★最重要★ 進了版控就要走 git filter-repo 清歷史，不是刪掉就好）
+# -----------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.env
+!env.example
+dagster_workspace/dagster_code/.env
+dagster_workspace/dbt_project/profiles.yml
+
+# 金鑰 / 憑證 / 密碼檔
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.crt
+*.cer
+!**/*.crt.example
+id_rsa*
+id_ed25519*
+*.ppk
+.netrc
+.pgpass
+.my.cnf
+
+# -----------------------------------------------------------------------------
+# 2. 真實資料（絕對不可進版控：本系統處理的是個資與交易明細）
+#     dbt seeds 若日後要用，請用 !dagster_workspace/dbt_project/seeds/ 明確放行
+# -----------------------------------------------------------------------------
+*.csv
+*.tsv
+*.xls
+*.xlsx
+*.zip
+*.7z
+*.gz
+*.tar
+*.bak
+*.bcp
+*.dat
+*.parquet
+data/
+!docs/**/*.csv
+
+# -----------------------------------------------------------------------------
+# 3. Dagster 執行期產物
+# -----------------------------------------------------------------------------
+dagster_workspace/dagster_home/storage/
+dagster_workspace/dagster_home/history/
+dagster_workspace/dagster_home/logs/
+dagster_workspace/dagster_home/schedules/
+dagster_workspace/dagster_home/compute_logs/
+dagster_workspace/dagster_home/.telemetry/
+dagster_workspace/dagster_home/*.db
+dagster_workspace/dagster_home/*.sqlite3
+.dagster/
+tmp*/
+
+# -----------------------------------------------------------------------------
+# 4. dbt 執行期產物（manifest 由 CD 在 VM4 上重新產生，不進版控）
+# -----------------------------------------------------------------------------
+dagster_workspace/dbt_project/target/
+dagster_workspace/dbt_project/logs/
+dagster_workspace/dbt_project/dbt_packages/
+dagster_workspace/dbt_project/package-lock.yml
+.user.yml
+
+# -----------------------------------------------------------------------------
+# 5. Python
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+eggs/
+.eggs/
+*.egg-info/
+*.egg
+.venv/
+venv/
+env/
+ENV/
+.python-version
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+
+# -----------------------------------------------------------------------------
+# 6. CI / 資安掃描產出（每次 pipeline 重新產生，不進版控）
+# -----------------------------------------------------------------------------
+bom.json
+gitleaks-report.json
+bandit-report.json
+pip-audit-report.json
+.sync_manifest*
+*.sha256
+
+# -----------------------------------------------------------------------------
+# 7. 編輯器 / 作業系統
+#     ._* 是 macOS AppleDouble；本地 hook 也會過濾掉它，這裡一併擋在版控外
+# -----------------------------------------------------------------------------
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+!.vscode/extensions.json
+*.swp
+*.swo
+*~
+.claude/
+
+# -----------------------------------------------------------------------------
+# 8. 本機暫存
+# -----------------------------------------------------------------------------
+*.log
+!docs/**/*.log
+scratch/
+local/
+NOTES_local.md

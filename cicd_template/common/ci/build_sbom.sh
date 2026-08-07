@@ -13,12 +13,15 @@
 #   DTRACK_FAIL_ON_HIGH=1     連 High 也擋（日常掃描用）
 #   DTRACK_FAIL_ON_MEDIUM=1   連 Medium 也擋（每季複掃用）
 #   DTRACK_POLL_MAX=12        等待分析的輪數，每輪 5 秒
-#   DTRACK_OS_SUPPRESS=0      關掉 OS 層套件自動放行（預設開啟）
+#   DTRACK_OS_SUPPRESS=0      關掉 libc* 自動放行（預設開啟）
+#   DTRACK_INHERIT=0          關掉「繼承 main 上已評估的例外」（預設開啟）
 #
 # 門檻（Critical 一律擋，不能關）：
 #   日常（MR / push）：Critical + High
 #   每季複掃         ：Critical + High + Medium
-#   兩者都不含 OS 層套件（glibc / libc-bin ... 由 ci/dtrack_suppress_os.sh 自動放行）
+#   兩者都不含 libc* 元件（由 ci/dtrack_suppress_os.sh 自動放行）
+#   已經在 main 上評估放行過的，由 ci/dtrack_inherit_analysis.sh 帶到目前分支，
+#   不會重複擋門
 # =============================================================================
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
@@ -136,13 +139,21 @@ UUID="$(printf '%s' "$PROJECT_INFO" | jqr '.uuid')"
 [[ -n "$UUID" && "$UUID" != "null" ]] || die "查不到專案 UUID，D-Track 回應：${PROJECT_INFO}"
 
 # -----------------------------------------------------------------------------
-# 4-1. 自動放行 OS 層套件（glibc / libc-bin / openssl ... 這類 base image 帶進來的）
+# 4-1. 自動放行 libc* 元件（base image 帶進來的，公司規定只有這個前綴可以規則放行）
 #      規則與理由見 ci/dtrack_suppress_os.sh
 # -----------------------------------------------------------------------------
 DTRACK_PROJECT_UUID="$UUID" "${ROOT}/ci/dtrack_suppress_os.sh"
 
 # -----------------------------------------------------------------------------
-# 4-2. 重算 metrics
+# 4-2. 繼承 main 上已經評估過的例外
+#      同一個元件、同一個 CVE，理由只要寫一次；
+#      不然每開一條新分支都會再擋一次、每個人都要重寫一次理由。
+# -----------------------------------------------------------------------------
+DTRACK_PROJECT_NAME="$PROJECT_NAME" DTRACK_PROJECT_UUID="$UUID" \
+    "${ROOT}/ci/dtrack_inherit_analysis.sh"
+
+# -----------------------------------------------------------------------------
+# 4-3. 重算 metrics
 #      擋門看的是 metrics 的數字，而 metrics 不是即時的。
 #      剛剛放行完（或有人在網頁上標了例外）之後不重算，
 #      這裡拿到的會是舊數字 —— 這是「明明標了還是紅的」最常見的原因。
@@ -198,8 +209,10 @@ if [[ "$c" -lt 0 || "$h" -lt 0 || "$m" -lt 0 ]]; then
     die "無法解析 D-Track 回傳的弱點數（回應：${METRICS}），視為未通過。"
 fi
 
-# 上面的數字**不含**已 suppressed 的項目，
-# 所以 OS 層套件（見 4-1）與人工標過 Not Affected 的都已經不在裡面了。
+# 上面的數字**不含**已 suppressed 的項目，所以下列都已經不在裡面：
+#   - libc* 元件（4-1 自動放行）
+#   - main 上評估過並放行的（4-2 繼承過來）
+#   - 這個版本上人工標過 Not Affected 的
 
 if [[ "$c" -gt 0 ]]; then
     log_error "偵測到 ${c} 個 Critical 弱點 → 阻擋 Pipeline"
