@@ -81,7 +81,7 @@ Environment scope: production   或 staging
 
 | Key | Type | Protected | Masked | production | staging |
 |---|---|---|---|---|---|
-| `DTRACK_IMAGE` | Variable | ✅ | ❌ | `gitlab.dai.post.gov.tw:5050/<group>/dagster:v2.7` | 同左 |
+| `DTRACK_IMAGE` | Variable | ✅ | ❌ | `gitlab.dai.post.gov.tw:5050/<group>/dagster:v2.6` | 同左 |
 
 `DEPLOY_PATH` 和 `POST_DEPLOY_CMD` 寫在 `.gitlab-ci.yml` 的 job `variables:` 裡
 （那些不是機密，寫在版控裡比較看得出來部署到哪）。

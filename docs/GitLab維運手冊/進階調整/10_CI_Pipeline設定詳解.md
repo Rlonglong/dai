@@ -272,7 +272,7 @@ runner 裝好 dbt 之後建議改成 `false` 讓它擋門。
 ```
 Settings → CI/CD → Variables
   Key   : DTRACK_IMAGE
-  Value : gitlab.dai.post.gov.tw:5050/<group>/<project>/dagster:v2.7
+  Value : gitlab.dai.post.gov.tw:5050/<group>/<project>/dagster:v2.6
   Scope : production
 ```
 

@@ -117,7 +117,7 @@ base image 的 OS 層套件（`glibc`、`libc-bin`…）已經由 `ci/dtrack_sup
 ```
 Settings → CI/CD → Variables
   Key   : DTRACK_IMAGE
-  Value : gitlab.dai.post.gov.tw:5050/<group>/<project>/dagster:v2.7
+  Value : gitlab.dai.post.gov.tw:5050/<group>/<project>/dagster:v2.6
   Scope : production   （Protected ✅）
 ```
 

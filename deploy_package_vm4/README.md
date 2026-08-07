@@ -30,7 +30,6 @@ deploy_package_vm4/
     ├── dagster_workspace/          ← Dagster 程式與 dbt 專案（DAGSTER_WORKSPACE）
     │                                  之後由 CD 從 VM3 rsync 覆蓋，見 Phase 4
     ├── dagster_data/               ← 落地檔工作目錄（DAGSTER_DATA_DIR，容器內 /data）
-    ├── gitlab-runner-cd/           ← gitlab-runner 註冊後的 config.toml 掛載點
     ├── rsyslog/                    ← Phase 6-2
     │   ├── vm4-server.conf             集中接收端 → /etc/rsyslog.d/10-dai-server.conf
     │   └── vm4-integrity-forward.conf  雜湊 manifest 轉發到 VM1

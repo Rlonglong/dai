@@ -100,7 +100,7 @@ CI 用的 team 權限勾這五個：
 
 | Key | Value |
 |---|---|
-| `DTRACK_IMAGE` | `gitlab.dai.post.gov.tw:5050/<group>/<project>/dagster:v2.7` |
+| `DTRACK_IMAGE` | `gitlab.dai.post.gov.tw:5050/<group>/<project>/dagster:v2.6` |
 
 > **為什麼放 Project 不放 Group**：`DTRACK_URL` / `DTRACK_API_KEY` 兩個 repo 相同，
 > 放 group 也可以；但 `DEPLOY_HOST` 之類的變數兩個 repo 不同，

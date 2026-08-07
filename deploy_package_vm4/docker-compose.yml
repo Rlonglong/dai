@@ -61,7 +61,7 @@ services:
       OAUTH2_PROXY_OIDC_ISSUER_URL: "https://auth.dai.post.gov.tw/realms/postoffice"
       OAUTH2_PROXY_SSL_INSECURE_SKIP_VERIFY: "true"
       OAUTH2_PROXY_COOKIE_SECURE: "true"
-      OAUTH2_PROXY_COOKIE_SECRET: "SegoraDagsterProxySecret2026!@#$"
+      OAUTH2_PROXY_COOKIE_SECRET: ${DAGSTER_LOGIN_COOKIE_SECRET}
       OAUTH2_PROXY_COOKIE_DOMAIN: ".dai.post.gov.tw"
       OAUTH2_PROXY_UPSTREAMS: "http://dagster-webserver:3000"
       OAUTH2_PROXY_REDIRECT_URL: "https://dagster.dai.post.gov.tw/oauth2/callback"
@@ -304,24 +304,13 @@ services:
       - vm4-network
 
   # ----------------------------------------
-  # 6. GitLab Runner (CD — 負責自動部署)
+  # （已移除）GitLab Runner (CD)
   # ----------------------------------------
-  gitlab-runner-cd:
-    image: dai/gitlab-runner:v2.1
-    container_name: gitlab-runner-cd
-    restart: unless-stopped
-    volumes:
-      - ./workspace/gitlab-runner-cd:/etc/gitlab-runner:z
-      - ./certs:/etc/gitlab-runner/certs:z
-      - /var/run/docker.sock:/var/run/docker.sock
-    extra_hosts:
-      - "gitlab.dai.post.gov.tw:${VM3_IP}"
-    logging:
-      driver: "syslog"
-      options:
-        tag: "dai/gitlab-runner-vm4"
-    networks:
-      - vm4-network
+  # CD runner 已統一改到 VM3，跟 CI runner 同一台（見部署手冊 Phase 3-5）。
+  # VM4 只當 rsync 的接收端：上面不會有 .git 目錄、也不需要對 GitLab 的連線，
+  # 所以這裡不再需要 gitlab-runner-cd 服務。
+  # 理由見 docs/GitLab維運手冊/進階調整/11_CD_rsync部署機制.md 第 8 節
+  #（為什麼是 VM3 推、而不是 VM4 拉）。
 
 volumes:
   infra-db-data:

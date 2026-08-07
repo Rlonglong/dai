@@ -602,7 +602,7 @@ curl -I https://gitlab.dai.post.gov.tw/users/sign_in    # Phase 3 起來後不�
 
 ### 0-10. Dagster 工作目錄權限（VM4）
 
-`dai/dagster:v2.7` 明確以 **UID 10001**（非 root）執行，且 root filesystem 為 `read_only: true`。Host 端掛載給 Dagster 的目錄必須讓 UID 10001 可寫，否則容器會在啟動時出現 `Permission denied`：
+`dai/dagster:v2.6` 明確以 **UID 10001**（非 root）執行，且 root filesystem 為 `read_only: true`。Host 端掛載給 Dagster 的目錄必須讓 UID 10001 可寫，否則容器會在啟動時出現 `Permission denied`：
 
 ```bash
 # 在 VM4 執行
@@ -1975,7 +1975,7 @@ CI 不需要能刪專案或改權限。
 `dagster-workspace` 還要多一個：
 
 ```
-  DTRACK_IMAGE = gitlab.dai.post.gov.tw:5050/<group>/<project>/dagster:v2.7
+  DTRACK_IMAGE = gitlab.dai.post.gov.tw:5050/<group>/<project>/dagster:v2.6
 ```
 
 **為什麼**：兩個 repo 的 SBOM 來源不一樣。

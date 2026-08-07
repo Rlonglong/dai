@@ -1,4 +1,22 @@
+# =============================================================================
+# Dagster code location 設定
+# =============================================================================
+# webserver 與 daemon 都用這份（compose 的 -w /app/workspace/workspace.yml）。
+#
+# ★ 這裡指向 dagster-code 這個 gRPC code server，不是直接 in-process 載入模組。★
+#   dagster-code 容器的啟動指令是：
+#       dagster code-server start -h 0.0.0.0 -p 4000 -m dagster_code -d /app/workspace
+#   三個容器都在 vm4-network 上，所以用容器名稱 dagster-code 就解析得到。
+#
+# 為什麼要走 gRPC 而不是讓 webserver 自己 import：
+#   1. 程式碼壞掉時只有 code server 起不來，webserver 還活著、UI 還打得開，
+#      看得到錯誤訊息；in-process 的話整個 UI 一起掛掉。
+#   2. 改完程式碼在 UI 按 Reload definitions 就會重連，不用重啟 webserver。
+#   3. compose 的 depends_on: dagster-code: service_healthy 才有意義。
+# =============================================================================
+
 load_from:
-  - python_module:
-      module_name: dagster_code
-      working_directory: /app/workspace
+  - grpc_server:
+      host: dagster-code
+      port: 4000
+      location_name: dagster_code
