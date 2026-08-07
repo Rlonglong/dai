@@ -338,41 +338,9 @@ echo 'export PATH="$PATH:/opt/mssql-tools18/bin"' >> /home/bcp_runner/.bashrc
 | 對帳失敗 | 每日雜湊對帳的時間戳、金融交易對帳的時間區間會錯 |
 | **稽核軌跡失效** | 四台機器的 log 集中到 VM4 之後，時間對不上就**無法重建事件順序**——這是稽核一定會查的項目 |
 
-#### 0-4-1. 前置準備（請高權限資訊人員先做，一次性）
+#### 0-4-1. 設定對時主機
 
-本手冊的日常操作**盡量不使用 `sudo`**。請先聯繫內網系統管理員（root），
-為維運帳號（以下以 `postadmin` 為例）開通兩項一次性授權：
-
-**① 讓維運帳號改得動時間設定檔**
-```bash
-# root 執行
-setfacl -m u:postadmin:rw /etc/chrony.conf
-```
-
-**② 讓維運帳號不用密碼就能重啟 chronyd**
-
-用 polkit 規則開一張「免密碼通行證」，邏輯是：
-只要是 `postadmin` 要對 `chronyd.service` 做管理控制，就直接放行、不索取密碼。
-
-```bash
-# root 執行
-cat << 'EOF' | tee /etc/polkit-1/rules.d/10-chronyd-management.rules
-polkit.addRule(function(action, subject) {
-    if (action.id == "org.freedesktop.systemd1.manage-units" &&
-        action.lookup("unit") == "chronyd.service" &&
-        subject.user == "postadmin") {
-        return polkit.Result.YES;
-    }
-});
-EOF
-```
-
-> 只授權 `chronyd.service` 這一個 unit，不是整個 systemd。
-> 帳號名稱不是 `postadmin` 的話，兩個地方都要改。
-
-#### 0-4-2. 設定對時主機
-
-以下維運人員直接執行，**不需要加 `sudo`**：
+以下都需要 root 權限（直接用 root 或每行加 `sudo`）：
 
 **步驟一：開啟設定檔**
 ```bash
@@ -400,7 +368,7 @@ systemctl enable chronyd
 systemctl restart chronyd
 ```
 
-#### 0-4-3. 驗證
+#### 0-4-2. 驗證
 
 ```bash
 chronyc sources -v
