@@ -115,6 +115,11 @@ sast-bandit:
 sca-dtrack:
   stage: security
   tags: [vm3, ci]
+  variables:
+    # 日常門檻：Critical + High 就擋。
+    # 擋住之後怎麼過：job log 最後會印三條路，或見
+    # docs/D-Track與Superset手冊/日常維運/04_弱掃紅燈與MR被卡住的解除流程.md
+    DTRACK_FAIL_ON_HIGH: "1"
   script:
     # 這個 repo 有 requirements.txt，build_sbom.sh 會自動走那條路徑
     - ci/build_sbom.sh
@@ -145,7 +150,9 @@ sca-dtrack-quarterly:
   stage: security
   tags: [vm3, ci]
   variables:
+    # 每季門檻比日常嚴：連 Medium 也要擋，專門清技術債
     DTRACK_FAIL_ON_HIGH: "1"
+    DTRACK_FAIL_ON_MEDIUM: "1"
     DTRACK_POLL_MAX: "36"
   script:
     - ci/build_sbom.sh

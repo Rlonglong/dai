@@ -37,9 +37,10 @@ ALTER ROLE db_datareader ADD MEMBER superset_ro;
 ### 1-2. 在 Superset 建立連線
 
 ```
-Settings → Database Connections → + Database
+右上角 Settings → Data 區塊 → Database Connections
+  → 右上 + Database
   1. 選資料庫類型（PostgreSQL / Microsoft SQL Server / …）
-  2. 填連線資訊，或直接用 SQLAlchemy URI
+  2. 填連線資訊，或切到 SQLAlchemy URI 直接貼
   3. 按 Test Connection ← ★一定要按，成功了再存★
   4. Connect
 ```
@@ -50,9 +51,6 @@ SQLAlchemy URI 格式：
 postgresql+psycopg2://superset_ro:<密碼>@<主機>:5432/<資料庫>
 mssql+pyodbc://superset_ro:<密碼>@<主機>:1433/<資料庫>?driver=ODBC+Driver+18+for+SQL+Server&Encrypt=yes&TrustServerCertificate=yes
 ```
-
-> 📸 **待補截圖**：Database Connections 頁面與 + Database 對話框，
-> 標出 Test Connection 按鈕。
 
 ### 1-3. Advanced 分頁的四個開關
 
@@ -108,77 +106,119 @@ Superset 的權限分兩層，**兩層都要對，使用者才看得到東西**�
 第二層：資料來源（Datasource） 看不看得到某個 Dataset
 ```
 
+**UI 路徑（Superset 6.1.0）**：
+
+```
+右上角 Settings → Security 區塊
+  ├─ List Roles      ← 角色與權限
+  ├─ List Users      ← 使用者（★不要手動新增★）
+  ├─ List Groups     ← 群組
+  └─ Row Level Security  ← 同一張表只讓某些人看某些列
+```
+
+![Settings → List Roles](./images/17_superset_list_roles.png)
+
 ### 3-1. 內建角色
 
-| 角色 | 能做什麼 | 給誰 |
+| 角色 | 能做什麼 | 對應到誰 |
 |---|---|---|
 | `Admin` | 全部，包含改設定、管理使用者 | 系統管理員（**盡量少人**） |
 | `Alpha` | 建 / 改所有 Dataset、Chart、Dashboard，不能改系統設定 | 開發人員 |
 | `Gamma` | **只能看被授權的資料**，可以自己做 Chart / Dashboard | 業務單位 |
 | `sql_lab` | 可以用 SQL Lab（**要跟上面的角色搭配一起給**） | 需要自己撈資料的人 |
+| `Public` | 未登入者。**我們沒有開放匿名存取，這個角色應該保持沒有任何權限** | — |
 
-> `Gamma` 是預設給一般使用者的角色，它**預設看不到任何 Dataset**，
-> 要另外授權（見 3-2）。這是刻意的：預設看不到，比預設全看得到安全。
+> `Gamma` **預設看不到任何 Dataset**，要另外授權（見 3-2）。
+> 這是刻意的：預設看不到，比預設全看得到安全。
 
-### 3-2. 讓 Gamma 使用者看得到特定資料
-
-**做法 A：自訂角色（建議，好管理）**
+### 3-2. 建一個「資料角色」給某群人看某些資料
 
 ```
 Settings → List Roles → + Role
   Name: 稽核室
-  Permissions: 加入
-    - datasource access on [dai-postgres].[vd_ATM異常提領](id:12)
-    - datasource access on [dai-postgres].[每日詐欺名單](id:15)
+  Permissions: 搜尋 datasource access，加入
+    - datasource access on [正式機 SQL Server].[mrt_ATM_C2](id:12)
+    - datasource access on [正式機 SQL Server].[mrt_ATM_E2](id:15)
   → Save
-
-Settings → List Users → 編輯使用者 → Roles 加上「Gamma」與「稽核室」
 ```
 
-**做法 B：Dashboard 層級授權**
-
-Superset 較新的版本支援直接把 Dashboard 分享給角色
-（Dashboard → Edit properties → Roles）。
-使用者仍需要有底層 Dataset 的權限才看得到數字。
-
-> 📸 **待補截圖**：List Roles 的權限編輯畫面，標出 `datasource access on ...` 那種項目長什麼樣。
-
-### 3-3. 建議的角色規劃
-
-| 使用者類型 | 角色組合 |
-|---|---|
-| 系統管理員 | `Admin` |
-| 開發人員 | `Alpha` + `sql_lab` |
-| 業務單位（要自己撈） | `Gamma` + `sql_lab` + `<自訂資料角色>` |
-| 業務單位（只看 Dashboard） | `Gamma` + `<自訂資料角色>` |
+**這個角色建好之後，不要在 Superset 上一個一個加人**——
+改成在 Keycloak 建對應的群組，見第 4 節。
 
 ---
 
-## 4. 使用者從哪裡來
+## 4. 使用者與權限統一在 Keycloak 管
 
-**使用者不是在 Superset 建的。** 走 Keycloak SSO 的流程是：
+> ✅ **原則：Superset 上不建帳號、不手動指派角色。**
+> 誰能登入、誰是什麼角色，全部由 Keycloak 決定。
+
+### 4-1. 為什麼
+
+| | 在 Superset 上開帳號 | 統一在 Keycloak 管 |
+|---|---|---|
+| 新人加入 | 要記得在每套系統各開一份 | 加進 Keycloak 群組，四套系統一次到位 |
+| 離職 | **容易漏掉**，帳號會留著還能登入 | LDAP 停用 → 所有系統都登不進去 |
+| 稽核「誰有權限」 | 要一套一套系統查 | 看 Keycloak 群組成員即可 |
+| 權限調整 | 每套系統各改一次 | 改群組就好 |
+
+### 4-2. 對應機制
 
 ```
-使用者第一次用 SSO 登入
-      ▼
-Superset 自動建立一個本機使用者紀錄（帳號、姓名、email 來自 Keycloak）
-      ▼
-依 custom_sso_security_manager.py 的對應規則指派角色
+公司 LDAP
+   │ Keycloak User Federation 同步
+   ▼
+Keycloak 群組（例如 dai-superset-viewer）
+   │ 登入時把群組資訊放進 token
+   ▼
+superset_config.py 的 AUTH_ROLES_MAPPING
+   │ 把「Keycloak 群組」對應到「Superset 角色」
+   ▼
+使用者拿到角色 → 決定他看得到什麼
 ```
 
-所以：
+設定檔怎麼寫見
+[進階調整 · 11 · 第 3 節](../進階調整/11_Superset_SSO與設定檔.md#3-角色怎麼對應)。
 
-- **不要**在 Superset 手動建帳號（`Settings → List Users → +`），
-  那會變成一個不受 LDAP 管理的帳號，離職時不會被停用
-- 要調整角色，改 Keycloak 的群組／角色對應，
-  或改 `custom_sso_security_manager.py` 的對應邏輯
-  （見 [進階調整 · 11](../進階調整/11_Superset_SSO與設定檔.md)）
+### 4-3. 建議的群組規劃
 
-### 離職 / 轉調
+| Keycloak 群組 | Superset 角色 | 給誰 |
+|---|---|---|
+| `dai-superset-admin` | `Admin` | 系統管理員（1–2 人） |
+| `dai-superset-dev` | `Alpha` + `sql_lab` | 開發人員 |
+| `dai-superset-user` | `Gamma` + `sql_lab` | 需要自己撈資料的業務單位 |
+| `dai-superset-viewer` | `Gamma` | 只看 Dashboard 的業務單位 |
+| `dai-superset-<單位>` | 該單位的自訂資料角色（3-2 建的） | 控制看得到哪些 Dataset |
 
-1. LDAP 帳號停用 → 該使用者就登不進來了（**這是主要手段**）
-2. Superset 上的使用者紀錄可以留著（保留他建立的 Chart 的擁有者資訊）
-3. 如果他是某些 Dashboard 的唯一 Owner，記得**先改 Owner** 再處理
+一個人可以同時屬於多個群組，角色會疊加。
+例如稽核室的人：`dai-superset-viewer` + `dai-superset-稽核室`。
+
+### 4-4. 新人加入 / 離職
+
+**加入**：
+```
+1. 系統管理員把人加進對應的 Keycloak 群組
+2. 請對方自己登入一次 Superset（第一次登入才會建立本機使用者紀錄）
+3. Settings → List Users 確認他的 Roles 是對的
+```
+
+**離職 / 轉調**：
+```
+1. LDAP 帳號停用（★這是主要手段★，停用後就登不進來了）
+2. 從 Keycloak 群組移除
+3. 檢查他是不是某些 Dashboard 的唯一 Owner
+   Dashboards → 篩選 Owner → 有的話先改 Owner 再處理
+```
+
+> Superset 上的使用者紀錄可以留著（保留他建立的 Chart 的擁有者資訊），
+> 反正登不進來了。
+
+### 4-5. 三個不要
+
+| 不要做 | 為什麼 |
+|---|---|
+| 在 `Settings → List Users → +` 手動建帳號 | 那會變成不受 LDAP 管理的帳號，離職時不會被停用 |
+| 在 `List Users` 直接改某人的 Roles | `AUTH_ROLES_SYNC_AT_LOGIN=True` 時，下次登入就被洗掉，而且不會有任何提示 |
+| 給 `Public` 角色任何權限 | 那等於開放匿名存取 |
 
 ---
 

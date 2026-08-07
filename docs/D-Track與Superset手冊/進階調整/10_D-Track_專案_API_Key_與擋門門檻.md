@@ -37,89 +37,170 @@ dagster-workspace : feature/xxx
 
 ### 建立
 
+**UI 路徑（D-Track v4.14.2）**：
+
 ```
-Administration → Access Management → Teams → + Create Team
-  Name: gitlab-ci
+左側選單 Administration
+  → 中間清單 Access Management
+  → 展開後選 Teams
+  → + Create Team
 ```
 
-權限**只勾這四個**（最小權限）：
+![Administration → Access Management → Teams](../日常維運/images/08_dtrack_teams.png)
+
+現有的 team（`System SBOM Uploaders` 就是 CI 在用的那個）：
+
+| Team | 用途 |
+|---|---|
+| `Administrators` | 系統管理 |
+| `Automation` | 自動化 |
+| `Badge Viewers` | 只看徽章 |
+| `Portfolio Managers` | 專案管理 |
+| **`System SBOM Uploaders`** | **CI 上傳 SBOM 與自動放行 OS 套件用的 API Key 放這裡** |
+
+CI 用的 team 權限勾這五個：
 
 | 權限 | 為什麼需要 |
 |---|---|
 | `BOM_UPLOAD` | 上傳 SBOM |
 | `VIEW_PORTFOLIO` | 查專案 UUID |
-| `VIEW_VULNERABILITY` | 讀弱點數量 |
+| `VIEW_VULNERABILITY` | 讀弱點數量與 findings 清單 |
 | `PROJECT_CREATION_UPLOAD` | `autoCreate=true` 自動建專案 |
+| **`VULNERABILITY_ANALYSIS`** | **自動放行 OS 層套件（`ci/dtrack_suppress_os.sh`）** |
 
-**不要**給 `PORTFOLIO_MANAGEMENT` 或 `ACCESS_MANAGEMENT`——
-CI 只需要上傳與讀取，不需要能刪專案或改權限。
+> ⚠️ **`VULNERABILITY_ANALYSIS` 是一個「能讓紅燈變綠燈」的權限**，
+> 給 CI 是刻意的取捨：
+>
+> - **給了它**，`ci/dtrack_suppress_os.sh` 才能自動放行 glibc 這類 OS 套件，
+>   讓真正該看的弱點浮出來
+> - **範圍是安全的**，因為腳本寫死只碰 `pkg:deb/` `pkg:rpm/` `pkg:apk/` 三種 purl，
+>   而且那份程式碼要走 MR 才改得動
+>
+> 不想承擔這個授權的話，設 `DTRACK_OS_SUPPRESS=0` 關掉自動放行，
+> 權限也就可以拿掉——代價是每次掃描都會被幾百個 OS 弱點淹沒。
 
-然後在該 team 底下 **Create API Key**。
+**不要**給 `PORTFOLIO_MANAGEMENT`（能刪專案）或 `ACCESS_MANAGEMENT`（能改權限）。
 
-> 📸 **待補截圖**：Teams 頁面的權限勾選清單，以及 Create API Key 的位置。
+建好之後在該 team 頁面底下 **Create API Key**。
 
 ### 填進 GitLab
 
 ```
-每個 repo → Settings → CI/CD → Variables
-  DTRACK_URL      = https://dtrack.dai.post.gov.tw    （Protected）
-  DTRACK_API_KEY  = odt_xxxxxxxx                       （Protected + Masked）
+該 project → Settings → CI/CD → 展開 Variables
+  → 確認你是加在 ★Project variables★ 區塊（不是 Group variables (inherited)）
+  → Add variable
 ```
+
+| Key | Value | Flags |
+|---|---|---|
+| `DTRACK_URL` | `https://dtrack.dai.post.gov.tw` | ☑ Protect |
+| `DTRACK_API_KEY` | `odt_xxxxxxxx` | ☑ Protect ☑ Mask |
 
 `dagster-workspace` 還要多一個：
 
-```
-  DTRACK_IMAGE = gitlab.dai.post.gov.tw:5050/<group>/<project>/dagster:v2.7
-```
+| Key | Value |
+|---|---|
+| `DTRACK_IMAGE` | `gitlab.dai.post.gov.tw:5050/<group>/<project>/dagster:v2.7` |
+
+> **為什麼放 Project 不放 Group**：`DTRACK_URL` / `DTRACK_API_KEY` 兩個 repo 相同，
+> 放 group 也可以；但 `DEPLOY_HOST` 之類的變數兩個 repo 不同，
+> 混在 group 會推錯機器。為了「一個 project 的設定在一個地方看得完」，
+> 建議一律設在 Project variables。
 
 ### 輪替
 
 API Key 外洩或人員異動時：
 
-1. D-Track 上該 team → 刪掉舊 Key → Create 新的
-2. 更新兩個 repo 的 `DTRACK_API_KEY` variable
+1. D-Track → Administration → Access Management → Teams → 該 team → 刪掉舊 Key → Create 新的
+2. 更新兩個 repo 的 `DTRACK_API_KEY`（Project variables）
 3. 手動觸發一次 pipeline 確認還能上傳
 
 ---
 
-## 3. 調整擋門門檻
+## 3. 權限統一在 Keycloak 管
 
-門檻由 `ci/build_sbom.sh` 的兩個環境變數控制：
+**人的權限不在 D-Track 上一個一個開**，而是由 Keycloak 群組對應到 D-Track team。
+
+### 對應機制
+
+```
+Keycloak 群組（成員來自公司 LDAP）
+      │  使用者用 OpenID 登入 D-Track
+      ▼
+D-Track: Administration → Access Management → OpenID Connect Groups
+      │  在這裡把「Keycloak 群組名稱」對應到「D-Track team」
+      ▼
+該 team 的權限就是這個人的權限
+```
+
+**UI 路徑**：
+```
+Administration → Access Management → OpenID Connect Groups
+  → 找到（或新增）Keycloak 傳過來的群組
+  → 指定它對應到哪一個 Team
+```
+
+### 建議的群組規劃
+
+| Keycloak 群組 | 對應 D-Track Team | 權限 |
+|---|---|---|
+| `dai-viewer` | `Badge Viewers` 或自建的唯讀 team | `VIEW_PORTFOLIO`、`VIEW_VULNERABILITY` |
+| `dai-security` | 自建的資安 team | 上面兩個 + `VULNERABILITY_ANALYSIS` |
+| `dai-admin` | `Administrators` | 全部 |
+
+> 📌 **「能把紅燈變綠燈」的權限（`VULNERABILITY_ANALYSIS`）要跟「能看」分開**，
+> 而且人數要少。
+> 標記例外是一個有安全影響的決定，應該只有少數幾個人做得到。
+
+### 好處
+
+| | 在 D-Track 上開帳號 | 統一在 Keycloak 管 |
+|---|---|---|
+| 新人加入 | 要記得在 D-Track 也開一份 | 加進 Keycloak 群組就好 |
+| 離職 | **容易漏掉**，帳號會留著 | LDAP 停用 → 登不進任何系統 |
+| 稽核「誰有權限」 | 要一套一套系統查 | 看 Keycloak 群組成員即可 |
+
+> ⚠️ **不要用 D-Track 的 Managed Users 手動建帳號。**
+> 那會變成一個不受 LDAP 管理的帳號，離職時不會被停用。
+> `Administration → Access Management → Managed Users` 底下應該只有救援用的 `admin`。
+
+---
+
+## 4. 調整擋門門檻
+
+門檻由 `ci/build_sbom.sh` 的環境變數控制：
 
 | 變數 | 預設 | 效果 |
 |---|---|---|
 | （無條件） | — | **Critical > 0 一律擋**，不能關 |
 | `DTRACK_FAIL_ON_HIGH` | `0` | 設 `1` 時 **High > 0 也擋** |
+| `DTRACK_FAIL_ON_MEDIUM` | `0` | 設 `1` 時 **Medium > 0 也擋** |
 | `DTRACK_POLL_MAX` | `12` | 等分析完成的輪數（每輪 5 秒） |
+| `DTRACK_OS_SUPPRESS` | `1` | 設 `0` 關掉 OS 層套件自動放行 |
 
 現在的設定寫在 `.gitlab-ci.yml`：
 
 ```yaml
-sca-dtrack:                    # 推送 / MR 時跑
-  script: [ci/build_sbom.sh]   # 不設 DTRACK_FAIL_ON_HIGH → 只擋 Critical
-
-sca-dtrack-quarterly:          # 每季排程 / 手動
+sca-dtrack:                      # 推送 / MR 時跑
   variables:
-    DTRACK_FAIL_ON_HIGH: "1"   # ← High 也擋
-    DTRACK_POLL_MAX: "36"      # ← 全量重新分析比較慢，給到 180 秒
-```
+    DTRACK_FAIL_ON_HIGH: "1"     # 日常：Critical + High 就擋
 
-### 想讓 High 也擋住日常 MR
-
-在 `sca-dtrack` 加上同樣的變數：
-
-```yaml
-sca-dtrack:
+sca-dtrack-quarterly:            # 每季排程 / 手動
   variables:
     DTRACK_FAIL_ON_HIGH: "1"
+    DTRACK_FAIL_ON_MEDIUM: "1"   # 每季：連 Medium 也擋
+    DTRACK_POLL_MAX: "36"        # 全量重新分析比較慢，給到 180 秒
 ```
 
-> ⚠️ **先想清楚再改。** 日常不擋 High 是刻意的決定：
-> 一個不相干的套件出 High 就讓所有人的 MR 全卡住，
-> 最後的結果通常不是「大家都很認真修弱點」，
-> 而是「有人來要求把這個 job 關掉」——那就什麼都沒有了。
->
-> 建議先連續兩季把 High 清到接近 0，再考慮打開。
+### 為什麼日常敢擋到 High
+
+因為 OS 層套件（`glibc`、`libc-bin`…）已經由 `ci/dtrack_suppress_os.sh`
+自動放行，不會灌爆數字。剩下的 High 都是「我們自己選的套件」，
+數量可控、也真的該處理。
+
+> ⚠️ **如果把 `DTRACK_OS_SUPPRESS` 關掉，一定要同時把門檻放寬回 Critical**，
+> 否則每個 MR 都會被幾百個 base image 的 OS 弱點擋住，
+> 最後的結果不是「大家都很認真修弱點」，而是「有人來要求把這個 job 關掉」。
 
 ### 想暫時放寬（緊急）
 
@@ -127,6 +208,7 @@ sca-dtrack:
 
 ```
 Run pipeline → Variables → DTRACK_FAIL_ON_HIGH = 0
+（每季掃再加一個 DTRACK_FAIL_ON_MEDIUM = 0）
 ```
 
 只影響那一次執行，不會留下永久的設定漏洞。
@@ -135,7 +217,7 @@ Run pipeline → Variables → DTRACK_FAIL_ON_HIGH = 0
 
 ---
 
-## 4. 兩個 repo 的 SBOM 來源
+## 5. 兩個 repo 的 SBOM 來源
 
 | repo | 來源 | 判斷方式 |
 |---|---|---|
@@ -165,7 +247,7 @@ python -m pip freeze > requirements.txt
 
 ---
 
-## 5. 每季排程設定
+## 6. 每季排程設定
 
 兩個 repo **各建兩個排程**（共四個）。這裡只講弱掃那個，
 雜湊對帳那個見 [GitLab維運手冊 · 12](../../GitLab維運手冊/進階調整/12_同步完整性稽核.md)。
@@ -200,7 +282,7 @@ Pipeline schedules → 該排程右邊的 ▶ (Play) 按鈕
 
 ---
 
-## 6. artifacts 保留期限
+## 7. artifacts 保留期限
 
 | job | 保留 | 為什麼 |
 |---|---|---|

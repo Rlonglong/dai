@@ -166,6 +166,13 @@ sast-bandit:
 sca-dtrack:
   stage: security
   tags: [vm3, ci]
+  variables:
+    # 日常門檻：Critical + High 就擋。
+    # High 擋得住，是因為 base image 的 OS 套件（glibc / libc-bin ...）
+    # 已經由 ci/dtrack_suppress_os.sh 自動放行，不會灌爆這個數字。
+    # 擋住之後怎麼過：job log 最後會印三條路，或見
+    # docs/D-Track與Superset手冊/日常維運/04_弱掃紅燈與MR被卡住的解除流程.md
+    DTRACK_FAIL_ON_HIGH: "1"
   script:
     - ci/build_sbom.sh
   artifacts:
@@ -201,9 +208,10 @@ sca-dtrack-quarterly:
   stage: security
   tags: [vm3, ci]
   variables:
-    # 定期掃描的門檻比日常嚴：High 也要擋。
-    # 日常開發不擋 High 是為了不卡住進度，但每季這一次就是專門來清債的。
+    # 每季門檻比日常嚴：連 Medium 也要擋。
+    # 日常擋到 High，每季這一次專門把 Medium 的技術債一起清掉。
     DTRACK_FAIL_ON_HIGH: "1"
+    DTRACK_FAIL_ON_MEDIUM: "1"
     # 弱點分析要重跑，給它更久的時間
     DTRACK_POLL_MAX: "36"
   script:

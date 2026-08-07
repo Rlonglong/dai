@@ -10,8 +10,15 @@
 #   DTRACK_IMAGE     當 repo 沒有 requirements.txt 時，改從這個映像檔裡
 #                    pip freeze 產生 SBOM（dagster_workspace 的套件是烘焙在
 #                    dai/dagster 映像裡的，repo 本身沒有 requirements.txt）
-#   DTRACK_FAIL_ON_HIGH=1   連 High 也擋（預設只擋 Critical）
-#   DTRACK_POLL_MAX=12      等待分析的輪數，每輪 5 秒
+#   DTRACK_FAIL_ON_HIGH=1     連 High 也擋（日常掃描用）
+#   DTRACK_FAIL_ON_MEDIUM=1   連 Medium 也擋（每季複掃用）
+#   DTRACK_POLL_MAX=12        等待分析的輪數，每輪 5 秒
+#   DTRACK_OS_SUPPRESS=0      關掉 OS 層套件自動放行（預設開啟）
+#
+# 門檻（Critical 一律擋，不能關）：
+#   日常（MR / push）：Critical + High
+#   每季複掃         ：Critical + High + Medium
+#   兩者都不含 OS 層套件（glibc / libc-bin ... 由 ci/dtrack_suppress_os.sh 自動放行）
 # =============================================================================
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
@@ -128,6 +135,23 @@ PROJECT_INFO="$(curl -sS -G -H "X-API-Key: ${DTRACK_API_KEY}" \
 UUID="$(printf '%s' "$PROJECT_INFO" | jqr '.uuid')"
 [[ -n "$UUID" && "$UUID" != "null" ]] || die "查不到專案 UUID，D-Track 回應：${PROJECT_INFO}"
 
+# -----------------------------------------------------------------------------
+# 4-1. 自動放行 OS 層套件（glibc / libc-bin / openssl ... 這類 base image 帶進來的）
+#      規則與理由見 ci/dtrack_suppress_os.sh
+# -----------------------------------------------------------------------------
+DTRACK_PROJECT_UUID="$UUID" "${ROOT}/ci/dtrack_suppress_os.sh"
+
+# -----------------------------------------------------------------------------
+# 4-2. 重算 metrics
+#      擋門看的是 metrics 的數字，而 metrics 不是即時的。
+#      剛剛放行完（或有人在網頁上標了例外）之後不重算，
+#      這裡拿到的會是舊數字 —— 這是「明明標了還是紅的」最常見的原因。
+# -----------------------------------------------------------------------------
+curl -sS -o /dev/null -X POST -H "X-API-Key: ${DTRACK_API_KEY}" \
+    "${DTRACK_URL}/api/v1/metrics/project/${UUID}/refresh" || true
+log_info "已要求重算 metrics，等待 10 秒"
+sleep 10
+
 METRICS="$(curl -sS -H "X-API-Key: ${DTRACK_API_KEY}" \
     "${DTRACK_URL}/api/v1/metrics/project/${UUID}/current")"
 
@@ -138,7 +162,26 @@ LOW="$(printf '%s'      "$METRICS" | jqr '.low')"
 
 # 拿不到數字（null / 空）就當作沒過，不要因為解析失敗而放行
 num() { [[ "${1:-}" =~ ^[0-9]+$ ]] && echo "$1" || echo "-1"; }
-c="$(num "$CRITICAL")"; h="$(num "$HIGH")"
+c="$(num "$CRITICAL")"; h="$(num "$HIGH")"; m="$(num "$MEDIUM")"
+
+# 擋門後統一印這一段：告訴人「怎麼樣才能過」，而不是只丟一個紅燈
+how_to_pass() {
+    cat >&2 <<'HOWTO'
+
+  怎麼讓它過（三條路，擇一）：
+    1. 升級套件版本  ← 正解。到 D-Track 看 Fixed in 有沒有可用版本，
+                        改 requirements.txt（或映像檔）後開 MR 重掃。
+    2. 標記為不受影響  ← 沒有修補版本、或我們沒用到那個弱點路徑時走這條。
+         D-Track → 該專案 → Audit Vulnerabilities → 展開該筆 →
+         Analysis 選 NOT_AFFECTED → Details 寫清楚理由 → 勾 Suppress →
+         回到這個 job 按 Retry（metrics 由本腳本自動重算，不用手動點）。
+         ★ Details 沒寫理由的例外，稽核時等於沒有做過評估 ★
+    3. 排期處理  ← 有影響但一時修不掉：Redmine 開票，
+         D-Track 標 Exploitable 並在 Details 寫票號，走緊急放行流程。
+
+  完整步驟：docs/D-Track與Superset手冊/日常維運/04_弱掃紅燈與MR被卡住的解除流程.md
+HOWTO
+}
 
 cat >&2 <<EOF
 =======================================
@@ -151,20 +194,33 @@ cat >&2 <<EOF
 =======================================
 EOF
 
-if [[ "$c" -lt 0 || "$h" -lt 0 ]]; then
+if [[ "$c" -lt 0 || "$h" -lt 0 || "$m" -lt 0 ]]; then
     die "無法解析 D-Track 回傳的弱點數（回應：${METRICS}），視為未通過。"
 fi
 
+# 上面的數字**不含**已 suppressed 的項目，
+# 所以 OS 層套件（見 4-1）與人工標過 Not Affected 的都已經不在裡面了。
+
 if [[ "$c" -gt 0 ]]; then
     log_error "偵測到 ${c} 個 Critical 弱點 → 阻擋 Pipeline"
-    echo "  修法：到上面的 D-Track 連結看是哪個套件，升級到有修補的版本。" >&2
+    how_to_pass
     exit 1
 fi
 
 if [[ "${DTRACK_FAIL_ON_HIGH:-0}" == "1" && "$h" -gt 0 ]]; then
-    log_error "偵測到 ${h} 個 High 弱點，且 DTRACK_FAIL_ON_HIGH=1 → 阻擋 Pipeline"
+    log_error "偵測到 ${h} 個 High 弱點（門檻：High 以上擋）→ 阻擋 Pipeline"
+    how_to_pass
     exit 1
 fi
 
-[[ "$h" -gt 0 ]] && log_warn "有 ${h} 個 High 弱點，目前不擋門，但請排入處理（要擋請設 DTRACK_FAIL_ON_HIGH=1）"
+if [[ "${DTRACK_FAIL_ON_MEDIUM:-0}" == "1" && "$m" -gt 0 ]]; then
+    log_error "偵測到 ${m} 個 Medium 弱點（門檻：Medium 以上擋）→ 阻擋 Pipeline"
+    how_to_pass
+    exit 1
+fi
+
+[[ "${DTRACK_FAIL_ON_HIGH:-0}" != "1" && "$h" -gt 0 ]] && \
+    log_warn "有 ${h} 個 High 弱點，這一關不擋，但請排入處理"
+[[ "${DTRACK_FAIL_ON_MEDIUM:-0}" != "1" && "$m" -gt 0 ]] && \
+    log_warn "有 ${m} 個 Medium 弱點，這一關不擋，每季複掃時會擋"
 log_ok "SCA 檢查通過"

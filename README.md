@@ -26,7 +26,7 @@ title: 部署手冊
 ## 部署順序總覽
 
 ```
-[Phase 0] 所有 VM 基礎準備（Docker、OS 套件、部署包、IP、TLS、目錄權限）
+[Phase 0] 所有 VM 基礎準備（Docker、OS 套件、對時、部署包、IP、TLS、目錄權限）
 [Phase 1] VM4：啟動 infra-db（PostgreSQL 必須最先啟動）+ Dagster
 [Phase 2] VM5：啟動 Keycloak
           └─ 2-1: 啟動 Keycloak
@@ -46,7 +46,7 @@ title: 部署手冊
           └─ 4B: 安裝 post-deploy 腳本與 sudoers
           └─ 4C: 建立兩個 GitLab repo 並推上初始程式碼
           └─ 4D: 安裝伺服器端 pre-receive hook（★機密外洩的真正防線★）
-          └─ 4E: 分支保護、MR Approvals、CODEOWNERS、Variables、環境隔離
+          └─ 4E: 分支保護、Merge checks、Variables、環境隔離（CE）
           └─ 4F: 兩個排程（每日雜湊對帳 + 每季定期弱掃）
           └─ 4G: 首次部署
           └─ 4H: 通知開發人員安裝本地 hook
@@ -70,6 +70,49 @@ deploy_package_vm5.tar.gz
 ```
 
 **每台 VM 只會拿到自己那一份**，解開之後就是那台機器的完整部署目錄。
+
+### 四個包各自要放什麼
+
+| | VM1 | VM3 | VM4 | VM5 |
+|---|---|---|---|---|
+| `docker-compose.yml` | ✅ | ✅ | ✅ | ✅ |
+| `.env` | ✅ | ✅ | ✅ | ✅ |
+| `certs/` | ✅ | ✅ | ✅ | ✅ |
+| `workspace/`（該 VM 用到的部分） | ✅ | ✅ | ✅ | ✅ |
+| `secure_report/` | ✅ | ✅ | ✅ | ✅ |
+| `gitlab_workspace/`（hook、post-deploy、repo 範本） | — | ✅ | — | — |
+| `dagster_workspace/`（Dagster 程式與 dbt 專案） | — | — | ✅ | — |
+| `python_env/`（離線 wheel + python3.11 rpm） | ✅ | — | — | — |
+| `gitleaks_*_linux_x64.tar.gz` | — | ✅ | — | — |
+| Docker 與 OS 套件的 rpm | ✅ | ✅ | ✅ | ✅ |
+
+> 📌 **`gitlab_workspace/post_deploy/` 的兩支腳本雖然裝在 VM1 / VM4，
+> 但只放在 VM3 的包裡**，部署時由 VM3 `scp` 過去（見 Phase 4B）。
+> 這樣「腳本的唯一來源」只有一份，不會出現三台機器各有一份舊版的情況。
+
+### repo 根目錄那些檔案為什麼不能收進資料夾
+
+`.gitlab-ci.yml`、`.gitignore`、`.gitleaks.toml`、`.flake8`、`.sqlfluff`、
+`pyproject.toml`、`deploy_exclude.txt`、`README.md`、`LICENSE`
+**必須留在 repo 根目錄**，因為工具是固定去那裡找的：
+
+| 檔案 | 誰在讀它 | 搬走的後果 |
+|---|---|---|
+| `.gitlab-ci.yml` | GitLab | pipeline 直接不會跑（除非改專案設定的 CI path） |
+| `.gitignore` | git | 排除規則失效 |
+| `.gitleaks.toml` | gitleaks（本地 hook / 伺服器 hook / CI 三邊共用） | 每個呼叫點都要補 `-c` 參數 |
+| `.flake8` | flake8 | 只認 repo 根目錄的 `.flake8` / `setup.cfg` / `tox.ini` |
+| `.sqlfluff` | sqlfluff | 由檔案往上找到 repo 根 |
+| `pyproject.toml` | black | 同上 |
+| `deploy_exclude.txt` | `ci/deploy_rsync.sh` | rsync 少了刪除保護清單，**下次部署會洗掉正式機的 `.env`** |
+| `README.md` / `LICENSE` | 人 | GitLab 專案首頁不會顯示 |
+
+**這幾個檔案不影響四個 zip 的整潔**——它們屬於 GitLab repo，
+不會出現在部署包裡（`deploy_exclude.txt` 已經把 `ci/`、`.gitlab-ci.yml`
+這些排除掉了）。**部署包裡看到的只有上面那張表列的東西。**
+
+> 唯一搬得動、也已經搬掉的是 `bandit.yaml` → `ci/bandit.yaml`
+> （它是用 `-c` 明確指定路徑的，不靠自動搜尋）。
 
 ---
 
@@ -226,7 +269,109 @@ dnf localinstall msodbcsql18-*.rpm unixODBC-*.rpm
 odbcinst -q -d      # 應列出 [ODBC Driver 18 for SQL Server]
 ```
 
-### 0-4. 傳送部署包並解開
+### 0-4. 時間同步（chrony）★四台 VM 都要做★
+
+四台機器的時鐘不一致，會造成三個實際問題：
+
+| 影響 | 具體是什麼 |
+|---|---|
+| 排程錯亂 | Dagster 的 sensor、cron 排程、批次視窗判斷會對不上 |
+| 對帳失敗 | 每日雜湊對帳的時間戳、金融交易對帳的時間區間會錯 |
+| **稽核軌跡失效** | 四台機器的 log 集中到 VM4 之後，時間對不上就**無法重建事件順序**——這是稽核一定會查的項目 |
+
+#### 0-4-1. 前置準備（請高權限資訊人員先做，一次性）
+
+本手冊的日常操作**盡量不使用 `sudo`**。請先聯繫內網系統管理員（root），
+為維運帳號（以下以 `postadmin` 為例）開通兩項一次性授權：
+
+**① 讓維運帳號改得動時間設定檔**
+```bash
+# root 執行
+setfacl -m u:postadmin:rw /etc/chrony.conf
+```
+
+**② 讓維運帳號不用密碼就能重啟 chronyd**
+
+用 polkit 規則開一張「免密碼通行證」，邏輯是：
+只要是 `postadmin` 要對 `chronyd.service` 做管理控制，就直接放行、不索取密碼。
+
+```bash
+# root 執行
+cat << 'EOF' | tee /etc/polkit-1/rules.d/10-chronyd-management.rules
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") == "chronyd.service" &&
+        subject.user == "postadmin") {
+        return polkit.Result.YES;
+    }
+});
+EOF
+```
+
+> 📌 只授權 `chronyd.service` 這一個 unit，不是整個 systemd。
+> 帳號名稱不是 `postadmin` 的話，兩個地方都要改。
+
+#### 0-4-2. 設定對時主機
+
+以下維運人員直接執行，**不需要加 `sudo`**：
+
+**步驟一：開啟設定檔**
+```bash
+nano /etc/chrony.conf
+```
+
+**步驟二：註解掉預設的外部時間伺服器**
+
+找到寫著 `pool` 或 `server` 的那幾行，把連外網的註解掉：
+```
+# 註解掉原本的預設值，不連向外部網路
+# pool 2.pool.ntp.org iburst
+```
+
+**步驟三：加入內部指定的對時主機 IP**
+```
+# 加入對時主機（IP 請換成實際提供的值）
+server 10.XX.XXX.X iburst
+```
+*存檔：`Ctrl + O` → `Enter`；離開：`Ctrl + X`。*
+
+**步驟四：啟用並套用**
+```bash
+systemctl enable chronyd
+systemctl restart chronyd
+```
+
+#### 0-4-3. 驗證
+
+```bash
+chronyc sources -v
+```
+
+看輸出表格中你設定的那個 IP，**最左邊第一個符號是 `^*` 就代表同步成功**：
+
+- `^` = 這是一個時間伺服器來源
+- `*` = 系統目前正跟它同步中
+
+正常輸出長這樣：
+```
+===============================================================================
+^? synchast.example.com          0   6     0     -     +0ns[   +0ns] +/-    0ns
+^* 10.XX.XXX.X                   2   6   377    11   -123us[ -145us] +/-   25ms
+```
+
+> ⚠️ 顯示 `^?` 或 `^x` 代表連線失敗或被防火牆擋住，
+> 請聯繫網路管理人員確認該 IP 與 **UDP 123** 是否開通。
+
+**四台都設定完之後，再比對一次彼此的時間差**：
+```bash
+# 在每一台上執行，四台的輸出應該在 1 秒內
+date -u '+%Y-%m-%d %H:%M:%S'
+
+# 或直接看 chrony 估計的偏移量（System time 那行應該是毫秒等級）
+chronyc tracking
+```
+
+### 0-5. 傳送部署包並解開
 
 ```bash
 # 在你的操作機上，傳送 deploy package 至各 VM（以 VM3 為例）
@@ -254,7 +399,7 @@ cd <部署根目錄>
 ls -la          # 應該看到 docker-compose.yml、.env、certs/、workspace/
 ```
 
-### 0-5. 更新各 VM 的 IP 設定
+### 0-6. 更新各 VM 的 IP 設定
 
 **可以用指令或是 vim/nano 直接進去改**\
 **每台 VM 上，將 `.env` 裡的 IP 換成正式環境實際 IP：**
@@ -274,7 +419,7 @@ sed -i "s/VM5_IP=.*/VM5_IP=<VM5實際IP>/" .env
 grep -E '^VM[0-9]_IP=' .env
 ```
 
-### 0-6. 確認 compose 檔可以正確解析
+### 0-7. 確認 compose 檔可以正確解析
 
 改完 `.env`、動過 compose 檔的相對路徑之後，**先驗證再啟動**。
 這一步會把 `.env` 的變數代進去、把所有相對路徑展開成絕對路徑，
@@ -291,7 +436,7 @@ docker compose config | grep -E 'source:|device:'
 看到 `variable is not set. Defaulting to a blank string` 的警告就是 `.env` 有漏；
 看到路徑指到部署根目錄以外的地方，就是相對路徑沒跟著搬層。
 
-<!-- ### 0-7. 設定 /etc/hosts（測試環境）或申請 DNS（正式環境）
+<!-- ### 0-8. 設定 /etc/hosts（測試環境）或申請 DNS（正式環境）
 
 > **正式環境**：向 IT 申請 DNS A 記錄，指向對應 VM IP。
 > **測試環境**：在每台 VM 及使用者電腦的 `/etc/hosts` 加入以下對應。
@@ -309,7 +454,7 @@ docker compose config | grep -E 'source:|device:'
 
 > Container Registry **不需要**額外的 domain（與 GitLab 共用 `gitlab.dai.post.gov.tw`，僅 port 不同，見 Phase 3-D）。 -->
 
-### 0-8. 準備 TLS 憑證
+### 0-9. 準備 TLS 憑證
 
 憑證放在部署根目錄的 `certs/` 底下（**四台 VM 都要有**，各服務都需要驗證彼此的 TLS）：
 
@@ -354,7 +499,7 @@ curl -I https://gitlab.dai.post.gov.tw/users/sign_in    # Phase 3 起來後不�
 > 這一步只讓 **host** 信任該 CA。GitLab 與 dtrack 容器有自己的 trust store，
 > 還要另外匯入，見 Phase 3-2（GitLab）與 Phase 3-4（dtrack）。
 
-### 0-9. Dagster 工作目錄權限（VM4）
+### 0-10. Dagster 工作目錄權限（VM4）
 
 `dai/dagster:v2.7` 明確以 **UID 10001**（非 root）執行，且 root filesystem 為 `read_only: true`。Host 端掛載給 Dagster 的目錄必須讓 UID 10001 可寫，否則容器會在啟動時出現 `Permission denied`：
 
@@ -367,7 +512,7 @@ chown -R 10001:10001 ./workspace/dagster_home
 
 > 實際目錄名以 `.env` 裡的路徑變數為準，先用 `grep -i dagster .env` 確認。
 
-### 0-10. BCP Pipeline 資料目錄權限（VM1）
+### 0-11. BCP Pipeline 資料目錄權限（VM1）
 
 `dai/bcp_pipeline` 在 secure compose 中明確以 **UID:GID 1000:1000** 執行，需確保 `workspace/data` 目錄擁有者一致：
 
@@ -377,7 +522,7 @@ cd /run/media/root/D/deploy
 chown -R 1000:1000 ./workspace/data
 ```
 
-### 0-11. 初始設定檔權限（VM5）
+### 0-12. 初始設定檔權限（VM5）
 
 Superset 容器以非 root 身分讀這兩個設定檔，權限不足會啟動失敗：
 
@@ -418,7 +563,7 @@ docker exec infra-db psql -U "$(grep '^INFRA_DB_USER=' .env | cut -d= -f2)" -c '
 - `dagster-login`（OAuth2 Proxy，Dagster SSO 對外邊界）會持續重試連線 Keycloak，直到 Phase 2 的 Keycloak 啟動後才會轉為正常狀態，屬預期行為，不需要特別處理。
 - CD runner 已改到 VM3（跟 CI runner 同一台，見 Phase 3-5），VM4 不再需要 `gitlab-runner-cd`。改用 rsync 從 VM3 推送，VM4 只當接收端，上面不會有 `.git` 目錄、也不需要對 GitLab 的連線。理由見 [11_CD_rsync部署機制 · 第 8 節](./docs/GitLab維運手冊/進階調整/11_CD_rsync部署機制.md#8-為什麼是vm3-推而不是vm4-拉)。
 - PostgreSQL 對外 Port 是 `5433`（非預設 5432），參數來自 `INFRA_DB_PORT=5433`。
-- 務必先完成 Phase 0-9 的目錄權限設定，否則 `dagster-code` / `dagster-webserver` / `dagster-daemon` 會因為 `Permission denied` 啟動失敗。
+- 務必先完成 Phase 0-10 的目錄權限設定，否則 `dagster-code` / `dagster-webserver` / `dagster-daemon` 會因為 `Permission denied` 啟動失敗。
 
 ---
 
@@ -881,6 +1026,21 @@ docker exec gitlab /usr/local/bin/gitleaks version    # 確認容器裡也跑得
 > 開發者本機也要裝同一支（Phase 4H），版本盡量一致，
 > 否則同一份 `.gitleaks.toml` 可能有規則語法不支援。
 
+> 📴 **內網無對外網路完全沒問題。**
+>
+> | 項目 | 需要網路嗎 | 說明 |
+> |---|---|---|
+> | `pre-receive` hook 本身 | ❌ 不用 | 就是一支 bash 腳本，`docker cp` 進容器即可 |
+> | gitleaks 執行檔 | ❌ 不用（**取得時要**） | 靜態編譯的單一執行檔，不需安裝、不需相依套件。只有「把 tar.gz 帶進內網」這一步需要在有網路的地方下載 |
+> | gitleaks 掃描時 | ❌ 不用 | 它是**純正規表示式比對**，規則全部來自 `.gitleaks.toml`，不會查任何線上資料庫、也不會回傳資料 |
+> | `.gitleaks.toml` | ❌ 不用 | repo 裡就有 |
+>
+> 對照組：**D-Track 的弱點掃描才需要弱點資料庫**（那是 VM3 上的 D-Track 自己去同步，
+> 跟這裡的 hook 無關）。
+>
+> 所以離線環境要做的只有一件事：**在有網路的機器上把
+> `gitleaks_<版本>_linux_x64.tar.gz` 抓下來，跟部署包一起帶進內網。**
+
 > 同樣要處理「容器重建就消失」的問題，作法見
 > [GitLab維運手冊 · 10_CI_Pipeline設定詳解 · 3-5](./docs/GitLab維運手冊/進階調整/10_CI_Pipeline設定詳解.md#3-5-讓它在容器重建後還在)。
 
@@ -1213,6 +1373,11 @@ git checkout main && git branch -D test/pre-receive-hook
 
 ### 4E. 分支保護、Variables、環境隔離
 
+> ⚠️ **本節依 GitLab CE（免費版）撰寫。**
+> Merge Request Approvals（強制核准人數）與 CODEOWNERS 的**強制**效果
+> 都是 Premium 以上才有的功能，CE 沒有。
+> 本節寫的是 **CE 實際做得到的組合**，以及 CE 做不到、必須靠團隊規定補的部分。
+
 **正式與測試共用同一個 GitLab，靠三件事隔開**（缺一不可）：
 
 | 機制 | 做什麼 |
@@ -1221,72 +1386,165 @@ git checkout main && git branch -D test/pre-receive-hook
 | Protected 變數 | 正式環境的連線資訊只有保護分支上的 job 拿得到 |
 | Environment scope | 同一個變數名在 `production` / `staging` 有不同值 |
 
-**分支保護**（兩個 repo 都要）：Settings → Repository → Protected branches
+#### 4E-1. 分支保護
 
-| Branch | Allowed to merge | Allowed to push and merge | Force push |
+**UI 路徑**（兩個 repo 都要設）：
+
+```
+左側選單找到該 project（GitLab 介面上叫 Project，不叫 repo）
+  → Settings → Repository
+  → 展開 Protected branches
+  → Add protected branch
+```
+
+| Branch | Allowed to merge | Allowed to push and merge | Allowed to force push |
 |---|---|---|---|
-| `main` | **Maintainers** | **No one** | ❌ |
-| `develop` | Developers + Maintainers | Developers + Maintainers | ❌ |
+| `main` | **Maintainers** | **No one** | ❌ 關 |
+| `develop` | Developers + Maintainers | Developers + Maintainers | ❌ 關 |
 
-`main` 那列另外勾 **Require approval from code owners**。
+> `Allowed to push and merge = No one` 是**最關鍵的一條**：
+> 設了之後任何人（包含 Maintainer）都不能 `git push` 直接推 `main`，
+> 一定要開 MR。這一條 CE 就做得到。
 
-**Merge Request Approvals（EE 功能，這是「一定要 code review」的強制點）：**
-
-Settings → **Merge requests → Merge request approvals** → Add approval rule
-
-| 設定 | 值 |
-|---|---|
-| Rule name | `正式環境 Code Review` |
-| **Approvals required** | **1**（人手夠設 2） |
-| Target branch | `main` |
-| Eligible approvers | 開發團隊群組（別指定單一個人，會變瓶頸） |
-
-同頁的 **Approval settings**，四個都要勾：
-
-| 設定 | 不勾的後果 |
-|---|---|
-| **Prevent approval by author** | 作者自己 approve 自己，機制形同虛設 |
-| **Prevent approvals by users who add commits** | 幫忙推過 commit 的人不算獨立審查者 |
-| **Prevent editing approval rules in merge requests** | 作者可以在自己的 MR 裡把規則改成 0 人 |
-| **Remove all approvals when commits are added** | ★可以先拿 approve、再偷偷加 commit★ |
-
-同時勾選 **Pipelines must succeed** 與 **All threads must be resolved**。
-
-**建立 `CODEOWNERS`**（repo 根目錄），讓高風險檔案一定要對的人看過：
-
-```
-*                            @dai-developers
-
-# 動到部署與資安機制，一定要系統負責人審
-/deploy_exclude.txt          @dai-maintainers
-/.gitlab-ci.yml              @dai-maintainers
-/.gitleaks.toml              @dai-maintainers
-/ci/                         @dai-maintainers
-/gitlab_workspace/           @dai-maintainers
+**驗證**（一定要實測）：
+```bash
+git checkout main
+echo "test" >> README.md && git commit -am "test: 驗證分支保護"
+git push origin main
+# 預期：remote: GitLab: You are not allowed to push code to protected branches
+git reset --hard HEAD~1
 ```
 
-`deploy_exclude.txt` 特別列出來的理由：**漏一行就會在下次部署洗掉正式機的 `.env`**。
+#### 4E-2. Merge checks（CE 的強制點就只有這裡）
 
-> ★ **三層加起來** ★
-> `Allowed to push and merge = No one`（不可能繞過 MR）
-> ＋ `Approvals required ≥ 1` 與四個 Approval settings（一定要獨立的人審，且審完不能偷改）
-> ＋ `CODEOWNERS`（高風險檔案要對的人審）
+**UI 路徑**：
+
+```
+該 project → Settings → Merge requests
+```
+
+這一頁分成幾個區塊，逐一設定：
+
+**Merge method** —— 選 **Merge commit**
+
+| 選項 | 選不選 | 為什麼 |
+|---|---|---|
+| **Merge commit** | ✅ **選這個** | 每次合併都留一個 merge commit，**看得出「這批改動是一次 MR 進來的」**，稽核與 rollback 都靠它 |
+| Merge commit with semi-linear history | ❌ | 會要求來源分支必須先跟 `main` 同步，多一道 rebase 手續；歷史好看一點但不值得 |
+| Fast-forward merge | ❌ | **不留 merge commit**，MR 的界線在歷史上消失，rollback 時很難一次退掉整批 |
+
+**Merge options** —— 勾兩個
+
+| 選項 | 勾？ | 為什麼 |
+|---|---|---|
+| Automatically resolve merge request diff threads when they become outdated | ❌ **不要勾** | 討論串會因為推了新 commit 就自動消失，等於「改了就當作審過了」 |
+| Show link to create or view a merge request when pushing from the command line | ✅ 勾 | 純方便 |
+| Enable "Delete source branch" option by default | ✅ 勾 | 合併後自動刪分支，避免 D-Track 累積一堆廢棄的 project version |
+
+**Squash commits when merging** —— 選 **Allow**
+
+| 選項 | 選不選 |
+|---|---|
+| Do not allow | ❌ |
+| **Allow** | ✅ **選這個**（預設不壓縮，需要時作者自己勾） |
+| Encourage | ❌ |
+| Require | ❌ 一律壓成一個 commit 會讓「誰在哪一步改了什麼」消失 |
+
+**Merge checks** —— ★這是 CE 唯一能強制的閘門★
+
+| 選項 | 勾？ | 說明 |
+|---|---|---|
+| **Pipelines must succeed** | ✅ **必勾** | pipeline 沒綠燈就按不下 Merge。lint / 資安掃描 / D-Track 全靠這一條生效 |
+| Skipped pipelines are considered successful | ❌ **絕對不要勾** | 勾了之後「pipeline 被 skip」也算通過，等於留一個後門 |
+| **All threads must be resolved** | ✅ **必勾** | 所有 review 討論都要 resolve 才能合併 |
+
+#### 4E-3. CE 做不到的部分，怎麼補
+
+> 🚨 **CE 沒有 Merge Request Approvals。**
+> 也就是說：**作者可以自己開 MR、自己按 Merge**，
+> GitLab 不會擋。這不是設定漏了，是 CE 就沒有這個功能。
+
+| 想要的效果 | CE 能不能 | 怎麼補 |
+|---|---|---|
+| `main` 不能直接 push | ✅ 能 | 4E-1 的 `Allowed to push and merge = No one` |
+| pipeline 沒過不能合併 | ✅ 能 | 4E-2 的 `Pipelines must succeed` |
+| 討論沒解決不能合併 | ✅ 能 | 4E-2 的 `All threads must be resolved` |
+| **一定要有人核准才能合併** | ❌ **不能** | 只能靠團隊規定 + 事後稽核（見下） |
+| **作者不能自己核准自己** | ❌ 不能 | 同上 |
+| **CODEOWNERS 強制指定審查者** | ❌ 不能 | CODEOWNERS 檔案在 CE 沒有作用 |
+
+**CE 底下的替代做法（三選一或併用）：**
+
+1. **團隊規定 + 事後稽核**（成本最低）
+   - 規定：`main` 的每個 MR 都要有另一個人在討論串留下 `LGTM` 才能按 Merge
+   - 靠 `All threads must be resolved` 讓討論串一定要處理過
+   - 每月抽查 MR 清單，看有沒有「開了就自己合」的
+   - GitLab UI：該 project → **Merge requests** → 篩選 `Merged`，看 Approvers/留言
+
+2. **把 Merge 權限收在少數人手上**
+   - `Allowed to merge = Maintainers`，開發者一律是 Developer 角色
+   - Developer 只能開 MR、不能按 Merge → **實質上就是要另一個人（Maintainer）動手**
+   - 代價：Maintainer 會變瓶頸，人少的時候會卡
+   - **這是 CE 底下最接近「強制 code review」的做法，建議採用**
+
+3. **升級到 Premium**
+   - 才會出現 `Settings → Merge requests → Merge request approvals` 區塊
+   - 升級後要補設定：Approvals required ≥ 1、Prevent approval by author、
+     Prevent approvals by users who add commits、
+     Prevent editing approval rules in merge requests、
+     Remove all approvals when commits are added
+
+> 📌 **CODEOWNERS 檔案在 CE 可以放，但只是「文件」。**
+> 它不會擋合併、不會自動指定審查者。
+> 如果要放，把它當成「這些檔案改動時請找誰看」的對照表，
+> 並在 MR 樣板裡提醒，不要以為它有強制力。
+
+#### 4E-4. CI/CD Variables
+
+**UI 路徑**：
+```
+該 project → Settings → CI/CD → 展開 Variables
+```
+
+> ⚠️ **這一頁會看到兩個區塊，不要放錯：**
 >
-> 細節與驗證方式見
-> [04_帳號_權限_分支保護](./docs/GitLab維運手冊/日常維運/04_帳號_權限_分支保護.md#3-code-review-的強制性ee-版)。
+> | 區塊 | 什麼時候用 |
+> |---|---|
+> | **Group variables (inherited)** | 上層 group 設的，這一頁**只能看不能改**（要改要去 group 的設定頁）。兩個 repo 共用的值放這裡最省事 |
+> | **Project variables** | 這個 project 自己的。**下面的表格一律設在這裡** |
+>
+> **本表全部設在 `Project variables`。**
+> 之所以不放 group：`DEPLOY_HOST`／`DEPLOY_SSH_KEY` 兩個 repo 指向的目標機不同
+> （`dagster-workspace` → VM4、`bcp-scripts` → VM1），
+> 放 group 會互相汙染，推錯機器。
+>
+> `DTRACK_URL` 兩個 repo 相同，放 group 也可以；但為了「一個 project 的設定
+> 在一個地方看得完」，建議還是都設在 project。
 
-**CI/CD Variables**（Settings → CI/CD → Variables，每個都要勾 Protected）：
+每一個都要勾 **Protected**（只有保護分支上的 job 拿得到）：
 
-| Key | Type | Masked | Scope | 值 |
+| Key | Type | Masked | Environment scope | 值 |
 |---|---|---|---|---|
 | `DEPLOY_HOST` | Variable | ✅ | production / staging | 目標機 IP |
-| `DEPLOY_USER` | Variable | ❌ | 兩者 | `gitlab_runner` |
+| `DEPLOY_USER` | Variable | ❌ | `*` | `gitlab_runner` |
 | `DEPLOY_SSH_KEY` | **File** | — | production / staging | 私鑰完整內容 |
 | `DEPLOY_KNOWN_HOSTS` | **File** | — | production / staging | `known_hosts` 內容 |
-| `DTRACK_URL` | Variable | ❌ | 兩者 | `https://dtrack.dai.post.gov.tw` |
-| `DTRACK_API_KEY` | Variable | ✅ | 兩者 | D-Track API Key |
-| `DTRACK_IMAGE` | Variable | ❌ | 兩者 | 僅 `dagster-workspace` 需要（它的套件在映像檔裡） |
+| `DTRACK_URL` | Variable | ❌ | `*` | `https://dtrack.dai.post.gov.tw` |
+| `DTRACK_API_KEY` | Variable | ✅ | `*` | D-Track API Key |
+| `DTRACK_IMAGE` | Variable | ❌ | `*` | 僅 `dagster-workspace` 需要（它的套件在映像檔裡） |
 
+**新增一個變數的完整操作**：
+```
+Settings → CI/CD → Variables → Add variable
+  Type              : Variable 或 File
+  Environment scope : * 或 production 或 staging
+  Flags             : ☑ Protect variable    ← 幾乎都要勾
+                      ☑ Mask variable       ← 密碼類要勾
+  Key / Value       : 填入
+  → Add variable
+```
+
+> **Masked 的限制**：值必須至少 8 個字元、不能有換行，否則 GitLab 不讓你勾。
 > 私鑰是多行的，**一定要用 File 型別**，Variable 型別會壞掉且無法 mask。
 >
 > **`DEPLOY_PATH`、`SOURCE_DIR`、`POST_DEPLOY_CMD` 不用在這裡設**，
@@ -1301,6 +1559,9 @@ Settings → **Merge requests → Merge request approvals** → Add approval rul
 
 **驗證隔離有效**：在功能分支跑 `echo "[${DEPLOY_HOST:-空}]"` 應該是空的，
 在 `main` 上應該是 `[MASKED]`。驗完把測試用的 job 刪掉。
+
+> 細節與驗證方式見
+> [04_帳號_權限_分支保護](./docs/GitLab維運手冊/日常維運/04_帳號_權限_分支保護.md)。
 
 ---
 
@@ -1402,7 +1663,8 @@ ls -l /data/deploy/workspace/dagster_workspace/dbt_project/profiles.yml
 > （會刪的是 `--delete-excluded`，我們刻意不用）。
 > 所以那份清單同時是「不傳清單」和「刪除保護清單」。
 > **日後有人在那份清單裡漏掉一行，下一次部署就會洗掉正式機的帳密** ——
-> 所以 4E 的 `CODEOWNERS` 特別把它列為必須 Maintainer 審核的檔案。
+> 所以這個檔案的每一次改動都必須有人實際看過——CE 沒辦法用 CODEOWNERS 強制，
+> 只能靠 4E-3 的「Merge 權限收在 Maintainer 手上」與 review 規定。
 
 **最後到 Dagster UI 做一次 Reload definitions**，確認新的 manifest 被載入。
 
@@ -1463,36 +1725,56 @@ D-Track 自己會持續重新評分，但**那只是一個沒有人會去看的�
 | | 推送時 `sca-dtrack` | 每季 `sca-dtrack-quarterly` |
 |---|---|---|
 | 觸發 | MR / push / 合併 main | 排程（1/4/7/10 月 1 號 03:00） |
-| 擋門標準 | **Critical > 0** | **Critical 或 High > 0** |
+| 擋門標準 | **Critical + High** | **Critical + High + Medium** |
 | artifacts 保留 | 1 週 | **1 年**（稽核用） |
 
-> 日常不擋 High 是刻意的：一個不相干的套件出 High 就讓所有人的 MR 全卡住，
-> 最後大家會要求把這個 job 關掉——那就什麼都沒有了。
-> 日常只擋最嚴重的 Critical，**每季這一次專門用來清 High 的技術債**，
-> 時間點固定、可以事先安排人力。
+**兩個門檻都不含作業系統層套件**（`glibc`、`libc-bin`…）——
+容器 base image 帶進來的那些由 `ci/dtrack_suppress_os.sh` 自動標記為
+Not Affected + Suppressed，並在 Details 留下系統放行說明。
+理由與操作見 [D-Track與Superset手冊 · 04 · 第 2 節](./docs/D-Track與Superset手冊/日常維運/04_弱掃紅燈與MR被卡住的解除流程.md#2-作業系統層套件libc-那一類已經自動放行)。
+
+> **日常敢擋到 High**，是因為 OS 層套件自動放行之後，剩下的都是
+> 「我們自己選的套件」，數量可控。
+> **每季多擋 Medium**：那一次專門用來清技術債，時間點固定、可以事先安排人力。
+>
+> 擋住之後怎麼過（升級／標記 Not Affected 並寫理由／排期處理），
+> job log 最後會直接印出三條路，完整步驟見
+> [04_弱掃紅燈與MR被卡住的解除流程](./docs/D-Track與Superset手冊/日常維運/04_弱掃紅燈與MR被卡住的解除流程.md)。
 
 #### 步驟 1：建立 API Key
 
-1. 登入 `https://dtrack.dai.post.gov.tw`
-2. **Administration → Access Management → Teams** → 建 `gitlab-ci`
-3. 權限只勾這四個（最小權限）：
+1. 登入 `https://dtrack.dai.post.gov.tw`（點 **OpenID** 走 Keycloak SSO）
+2. **左側 Administration → Access Management → Teams → + Create Team**
+   （或用既有的 `System SBOM Uploaders`）
+3. 權限勾這五個（最小權限）：
 
 | 權限 | 為什麼需要 |
 |---|---|
 | `BOM_UPLOAD` | 上傳 SBOM |
 | `VIEW_PORTFOLIO` | 查專案 UUID |
-| `VIEW_VULNERABILITY` | 讀弱點數量 |
+| `VIEW_VULNERABILITY` | 讀弱點數量與 findings 清單 |
 | `PROJECT_CREATION_UPLOAD` | `autoCreate=true` 自動建專案 |
+| `VULNERABILITY_ANALYSIS` | 自動放行 OS 層套件（`ci/dtrack_suppress_os.sh`） |
 
 **不要**給 `PORTFOLIO_MANAGEMENT` 或 `ACCESS_MANAGEMENT` ——
-CI 只需要上傳與讀取，不需要能刪專案或改權限。
+CI 不需要能刪專案或改權限。
 
-4. 在該 team 底下 **Create API Key**
+> `VULNERABILITY_ANALYSIS` 是「能讓紅燈變綠燈」的權限，給 CI 是刻意的取捨
+> （腳本只碰 `pkg:deb/`／`pkg:rpm/`／`pkg:apk/`，且改程式碼要走 MR）。
+> 不想給的話設 `DTRACK_OS_SUPPRESS=0` 關掉自動放行。
+> 詳見 [附錄 A](./docs/D-Track與Superset手冊/附錄/A_D-Track_Analysis狀態與權限對照.md#3-team-權限對照)。
+
+4. 在該 team 頁面底下 **Create API Key**
+
+**人的權限不要在這裡開**——統一由 Keycloak 群組對應
+（`Administration → Access Management → OpenID Connect Groups`），
+見 [進階調整 · 10 · 第 3 節](./docs/D-Track與Superset手冊/進階調整/10_D-Track_專案_API_Key_與擋門門檻.md#3-權限統一在-keycloak-管)。
 
 #### 步驟 2：填進 GitLab Variables
 
 ```
-Settings → CI/CD → Variables
+該 project → Settings → CI/CD → 展開 Variables
+  → ★確認加在 Project variables 區塊，不是 Group variables (inherited)★
   DTRACK_URL      = https://dtrack.dai.post.gov.tw   （Protected）
   DTRACK_API_KEY  = odt_xxxxxxxx                      （Protected + Masked）
 ```
@@ -1539,11 +1821,12 @@ GitLab UI → Run pipeline（main）→ 看 sca-dtrack job 的 log
 =======================================
 🛡️  資安掃描結果（bcp-scripts:main）
 🔥 Critical : 0
-🚨 High     : 2
+🚨 High     : 0
 ⚠️  Medium   : 7
 ℹ️  Low      : 12
    D-Track  : https://dtrack.dai.post.gov.tw/projects/a3f2b91c-...
 =======================================
+[WARN]  有 7 個 Medium 弱點，這一關不擋，每季複掃時會擋
 [ OK ]  SCA 檢查通過
 ```
 
@@ -1584,11 +1867,13 @@ GitLab UI → Run pipeline（main）→ 看 sca-dtrack job 的 log
 [ ] bcp-scripts 首次 commit 前掃過 gitleaks
 [ ] ★ pre-receive hook 裝好，且用假金鑰實測過會被拒 ★
 [ ] main 分支保護設好，Developer 按不到 Merge 鍵
-[ ] ★ Approval Rules 設好：required ≥ 1，四個 Approval settings 都勾 ★
-[ ] ★ 實測：作者自己 approve 按不下去；approve 後再 push 會清掉 approval ★
-[ ] CODEOWNERS 建好，改 deploy_exclude.txt 會要求 Maintainer 審核
-[ ] Pipelines must succeed / All threads resolved 都勾了
-[ ] CI/CD Variables 設好（Protected + Masked + environment scope）
+[ ] Merge method 選 Merge commit；Squash 設 Allow
+[ ] ★ Pipelines must succeed 勾了，且「Skipped pipelines are considered successful」沒勾 ★
+[ ] ★ All threads must be resolved 勾了 ★
+[ ] 「Automatically resolve MR diff threads when they become outdated」沒勾
+[ ] ★ 實測：直接 git push main 會被 remote rejected ★
+[ ] CE 的 code review 補償措施已決定並公告（Merge 權限收在 Maintainer／團隊規定）
+[ ] CI/CD Variables 設在 **Project variables**（不是 Group），Protected + Masked + environment scope 都對
 [ ] 隔離驗證：功能分支拿不到 DEPLOY_HOST
 [ ] 兩個 repo 都設好每日雜湊對帳排程（30 8 * * *，SCHEDULE_TYPE=verify）
 [ ] 兩個 repo 都設好每季弱掃排程（0 3 1 */3 *，SCHEDULE_TYPE=quarterly）
@@ -1743,7 +2028,7 @@ docker compose run --rm bcp_pipeline
 # Test PASSED
 ```
 
-> 執行前務必完成 Phase 0-10 的 `workspace/data` 目錄權限設定（UID:GID 1000:1000），否則容器內非 root 使用者無法存取掛載的資料目錄。
+> 執行前務必完成 Phase 0-11 的 `workspace/data` 目錄權限設定（UID:GID 1000:1000），否則容器內非 root 使用者無法存取掛載的資料目錄。
 >
 > ⚠️ `.env` 裡有資料庫密碼，**權限要收到 600**：
 > ```bash
@@ -1841,15 +2126,10 @@ sudo systemctl restart systemd-journald
 
 ### 6-2. 部署 rsyslog 設定檔
 
-> 📌 **命名一律用 `dai`。**
-> 設定檔名、目錄、syslog tag、hash 腳本路徑全部是 `dai/*`、`/var/log/dai`、`/opt/dai`。
-> 如果你手上的 `workspace/rsyslog/*.conf`、`workspace/scripts/log_hash.sh`、
-> `workspace/logrotate/*` 裡面還留著舊的 `nexflow` 字樣，**要一起改掉**，
-> 否則轉發規則會對不上（rsyslog 比對不到就是靜默丟棄，不會報錯）：
-> ```bash
-> grep -rn "nexflow" ./workspace/rsyslog/ ./workspace/scripts/ ./workspace/logrotate/
-> # 有東西的話全部換成 dai 再往下做
-> ```
+> 📌 **命名一律用 `dai`**：設定檔名、目錄、syslog tag、hash 腳本路徑
+> 全部是 `dai/*`、`/var/log/dai`、`/opt/dai`。
+> 部署包裡的 `workspace/rsyslog/*.conf` 與 `workspace/scripts/log_hash.sh`
+> 已經是這個命名，直接照下面的步驟做即可。
 
 **VM4（集中接收端）：**
 ```bash
@@ -2033,7 +2313,7 @@ sudo restorecon -Rv /data/log/dai/
 |------|------|---------|
 | Keycloak 啟動 `does not exist`（jackson-databind / opentelemetry-api） | CVE 修補時用 `rm -f` 刪除舊版 jar，但 Quarkus 預編譯 classpath manifest 仍引用舊檔名 | `Dockerfile.keycloak`：改用 `ln -sf` 保留舊檔名 |
 | Keycloak `read_only` 環境下啟動失敗（`transformed-bytecode.jar: Read-only file system`） | jar 變動後 classpath 指紋改變，runtime 自動觸發 rebuild 但無寫入權限 | `Dockerfile.keycloak`：image build 階段預先執行 `kc.sh build --db=postgres --health-enabled=true --log-mdc-enabled=true`（build-time flag 須與 runtime 環境變數一致） |
-| Dagster 容器 `mkdir: Permission denied` | UID 10001 對 host 掛載目錄無寫入權限 | 需手動 `chown -R 10001:10001`（見 Phase 0-9，無法烘焙進 image，需在部署時執行） |
+| Dagster 容器 `mkdir: Permission denied` | UID 10001 對 host 掛載目錄無寫入權限 | 需手動 `chown -R 10001:10001`（見 Phase 0-10，無法烘焙進 image，需在部署時執行） |
 | Dagster telemetry `Read-only file system` / `Permission denied` | `DAGSTER_DISABLE_TELEMETRY=1` 不完全生效，仍嘗試寫 `$HOME/.dagster` | VM4 compose：`tmpfs` 加 `/home/dagster:uid=10001,gid=10001` |
 | GitLab Registry vhost `nginx [emerg] cannot load certificate` | `registry_external_url` 用 `https://` 觸發 omnibus 內建 TLS，預期憑證不存在 | VM3 compose：`registry_nginx['listen_https'] = false` |
 | dagster-login 服務遺失 | secure compose 整理時遺漏（註解寫了「沿用原設定」卻沒搬過去） | 已補回 VM4 compose |
@@ -2049,7 +2329,7 @@ sudo restorecon -Rv /data/log/dai/
 | dtrack OIDC available 回傳 `false` | JVM TrustStore 缺少自簽 CA | 確認映像版本為 `dai/dt_apiserver:v2.1` 以上；或手動 `keytool -import -cacerts` 後重啟（見 Phase 3-4） |
 | VM4 收不到其他 VM rsyslog | `dirOwner="root"` 導致 chown 失敗 | 確認 `vm4-server.conf` 中 `dirOwner="syslog"`，不是 `root` |
 | rsyslog 規則沒有觸發（NO MATCH） | 用了 `$programname`（只取 `/` 前的部分） | 改用 `$syslogtag contains "dai/"`；regex 用 `([a-zA-Z0-9_-]+)` |
-| Dagster 容器 `Permission denied` 無法啟動 | host 掛載目錄擁有者不是 UID 10001 | 執行 Phase 0-9 的 `chown -R 10001:10001` |
+| Dagster 容器 `Permission denied` 無法啟動 | host 掛載目錄擁有者不是 UID 10001 | 執行 Phase 0-10 的 `chown -R 10001:10001` |
 | superset-init 報錯 `User already exists` | admin 帳號已建立（第二次初始化） | 正常現象，compose 裡有 `|| true` 處理，superset 服務可正常啟動 |
 | GitLab `/users/sign_in` 持續 502，container healthcheck 卻顯示 healthy | Puma 仍在 `Preloading application`，container-level healthcheck（`/healthz`）跟 Rails app 是否真的能服務是兩回事；VM 規格不足時 Puma 會反覆卡住甚至被 OOM 影響 | 確認 VM3 記憶體足夠（GitLab + Registry + D-Track + 兩個 Runner 同機，8GB 會很吃緊）；用 `docker exec gitlab tail -f /var/log/gitlab/puma/current` 確認是否卡在同一行超過 2-3 分鐘 |
 | `dtrack-server` 一直 unhealthy | API server 啟動慢 | healthcheck `start_period=120s`，等足時間；`docker logs dtrack-server` 確認有無 exception |

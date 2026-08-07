@@ -168,7 +168,7 @@ gitlab_runner ALL=(root) NOPASSWD: /usr/local/sbin/dai-post-deploy-vm4.sh
 
 | 步驟 | 為什麼 |
 |---|---|
-| `chown -R 10001:10001` | Dagster 容器以 UID 10001 執行，rsync 過來的檔案屬於 `gitlab_runner`，不改的話容器 Permission denied（部署手冊 Phase 0-7 說的就是這件事） |
+| `chown -R 10001:10001` | Dagster 容器以 UID 10001 執行，rsync 過來的檔案屬於 `gitlab_runner`，不改的話容器 Permission denied（部署手冊 Phase 0-10 說的就是這件事） |
 | 目錄 750 / 檔案 640 | 裡面有 SQL 邏輯與表結構，不是公開資訊 |
 | `.env` / `profiles.yml` 收到 600 | 機密檔案只有擁有者能讀 |
 | `dbt parse` | 重產 `manifest.json`。Dagster 靠它產生 dbt 資產——沒重產的話新模型在 UI 上根本不存在 |

@@ -22,7 +22,7 @@ requirements.txt（或映像檔裡的套件清單）
         ↓  比對 NVD / OSV / GitHub Advisory
    每個套件的 Critical / High / Medium / Low 數量
         ↓
-   Critical > 0 → pipeline 紅燈，擋住合併
+   Critical / High > 0 → pipeline 紅燈，擋住合併
 ```
 
 ### 為什麼推送時掃過了還要定期掃
@@ -52,15 +52,18 @@ D-Track 自己會持續重新評分，所以 3/2 那天它資料庫裡的數字�
 | | 推送時（`sca-dtrack`） | 每季（`sca-dtrack-quarterly`） |
 |---|---|---|
 | 觸發 | MR / push / 合併 main | 排程（1/4/7/10 月 1 號 03:00） |
-| 擋門標準 | **Critical > 0** 就擋 | **Critical 或 High > 0** 就擋 |
+| 擋門標準 | **Critical + High** 就擋 | **Critical + High + Medium** 就擋 |
 | 逾時等待 | 12 輪 × 5 秒 = 60 秒 | 36 輪 × 5 秒 = 3 分鐘 |
 | artifacts 保留 | 1 週 | **1 年**（稽核用） |
 
-**為什麼日常不擋 High、每季才擋？**
+**為什麼日常擋到 High、每季才擋 Medium？**
 
-日常開發如果 High 就擋，一個不相干的套件出弱點會讓所有人的 MR 全部卡住，
+base image 的 OS 層套件（`glibc`、`libc-bin`…）已經由 `ci/dtrack_suppress_os.sh`
+自動放行，所以擋到 High 不會灌爆數字；剩下的都是「我們自己選的套件」。
+
+但如果連 Medium 也擋，一個不相干的套件出弱點會讓所有人的 MR 全部卡住，
 最後大家會要求把這個 job 關掉 —— 那就什麼都沒有了。
-所以日常只擋最嚴重的 Critical，**每季這一次專門用來清 High 的技術債**，
+所以日常擋到 High，**每季這一次專門用來清 Medium 的技術債**，
 時間點固定、可以事先安排人力。
 
 ---
@@ -94,7 +97,7 @@ D-Track 自己會持續重新評分，所以 3/2 那天它資料庫裡的數字�
 |---|---|
 | `secret-scanning` | gitleaks 掃**全樹 + 全部 git 歷史** |
 | `sast-bandit` | Python 資安規則 |
-| `sca-dtrack-quarterly` | SBOM → D-Track → Critical/High 擋門 |
+| `sca-dtrack-quarterly` | SBOM → D-Track → Critical/High/Medium 擋門 |
 
 **不會**跑 deploy，也**不會**跑雜湊對帳（那是每日排程的事）。
 
@@ -251,7 +254,7 @@ Projects → 篩掉 `main` 以外、且最後更新超過三個月的版本 → 
 | `上傳沒有拿到 token` | API Key 錯，或 team 少了 `BOM_UPLOAD` 權限 | 檢查權限勾選 |
 | `查不到專案 UUID` | `autoCreate` 沒生效（缺 `PROJECT_CREATION_UPLOAD`） | 補權限，或先在 UI 手動建專案 |
 | `等待 D-Track 分析逾時` | dtrack-server 忙或掛了 | `docker logs dtrack-server`；調高 `DTRACK_POLL_MAX` |
-| 掃出一堆 Low/Medium 但沒擋門 | 設計如此 | 每季複掃會擋 High；Low/Medium 進 Redmine 排期 |
+| 掃出一堆 Low/Medium 但沒擋門 | 設計如此 | 每季複掃會擋 Medium；Low 進 Redmine 排期 |
 | 每季排程沒跑 | 忘了設 `SCHEDULE_TYPE=quarterly` | 到 Schedules 補變數 |
 | 每季排程把對帳也跑了 | 同上，變數沒設對 | 兩個排程的變數不能一樣 |
 | 升級套件後 VM1 跑不起來 | 離線環境沒有新版 wheel | 先把 wheel 帶進 `/run/media/root/D/python_env/req/` 再升級 |
@@ -267,8 +270,8 @@ Projects → 篩掉 `main` 以外、且最後更新超過三個月的版本 → 
 [ ] secret-scanning 綠燈
 [ ] sast-bandit 綠燈
 [ ] sca-dtrack-quarterly 結果：
-        dagster-workspace  Critical ___  High ___
-        bcp-scripts        Critical ___  High ___
+        dagster-workspace  Critical ___  High ___  Medium ___
+        bcp-scripts        Critical ___  High ___  Medium ___
 [ ] 紅燈的項目已建立 Redmine 追蹤票：____________
 [ ] 標為 Not Affected 的弱點都有寫理由
 [ ] bom.json artifact 已下載存檔（稽核用）

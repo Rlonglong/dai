@@ -88,6 +88,12 @@ docker exec gitlab grep -n "custom_hooks_dir" /etc/gitlab/gitlab.rb
 
 ### 3-2. 放 gitleaks 執行檔與預設設定
 
+> 📴 **離線環境說明**：hook 與 gitleaks 執行時都**不需要任何對外連線**。
+> gitleaks 是靜態編譯的單一執行檔，掃描邏輯是純正規表示式比對，
+> 規則全部來自 `.gitleaks.toml`，不查線上資料庫、不回傳資料。
+> 唯一需要網路的是「在外面把 tar.gz 下載下來帶進內網」這一步。
+
+
 ```bash
 # 在 VM3，把 gitleaks binary 與設定送進 GitLab 容器
 docker cp gitleaks        gitlab:/usr/local/bin/gitleaks

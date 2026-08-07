@@ -9,16 +9,19 @@
 
 `https://superset.dai.post.gov.tw`
 
-會自動跳到 Keycloak 登入頁，用**公司帳號密碼**登入，成功後跳回 Superset。
+點 **Sign in with Keycloak**，用**公司帳號密碼**登入，成功後跳回 Superset。
 
-> 📸 **待補截圖**：Superset 首頁（登入後的 Dashboard 清單）。
+![Superset 登入頁](./images/11_superset_login.png)
+
+> 這是唯一的登入方式。**Superset 上不會有另外一組帳號密碼**——
+> 權限統一在 Keycloak 管，見 [02 · 第 4 節](./02_Superset_資料庫連線與權限.md#4-使用者與權限統一在-keycloak-管)。
 
 登不進去的話：
 
 | 症狀 | 原因 | 找誰 |
 |---|---|---|
 | 跳到 Keycloak 但登入失敗 | LDAP 帳號問題 | 系統管理員 |
-| 登入成功但回到 Superset 顯示空白／無權限 | Keycloak 角色沒對應到 Superset 角色 | 系統管理員，見 [02](./02_Superset_資料庫連線與權限.md) |
+| 登入成功但回到 Superset 顯示空白／無權限 | Keycloak 群組沒對應到 Superset 角色 | 系統管理員，見 [02 · 第 4 節](./02_Superset_資料庫連線與權限.md#4-使用者與權限統一在-keycloak-管) |
 | 一直在兩邊跳轉 | session / cookie 問題 | 先清瀏覽器 cookie 再試 |
 
 ---
@@ -57,7 +60,10 @@ Dashboard 由 Chart 組成，每張 Chart 背後一定有一個 Dataset。
 | 匯出整頁成圖片 | Dashboard 右上 **⋮ → Download → Download as Image** |
 | 加到我的最愛 | 名稱旁邊的 ☆ |
 
-> 📸 **待補截圖**：Dashboard 頁面，標出篩選器、⋮ 選單、☆ 的位置。
+![Dashboard 頁面](./images/12_superset_dashboard.png)
+
+上方那一排：`☆`（最愛）、`⟳`（重新整理全部圖表）、`Draft/Published` 狀態、
+擁有者、最後修改時間；右邊是 **Edit dashboard** 與 `⋯`（匯出、下載、分享）。
 
 ---
 
@@ -67,14 +73,19 @@ Dashboard 由 Chart 組成，每張 Chart 背後一定有一個 Dataset。
 
 ```
 上方選單 SQL → SQL Lab
-  1. 左上選 Database（例如 dai-postgres）
-  2. 選 Schema
+  1. 左上選 Database（例如「正式機 SQL Server」）
+  2. 選 Schema（例如 dbo）
   3. 中間輸入 SQL
-  4. Ctrl + Enter 執行（或按 Run）
-  5. 下方看結果，右上可以 Download to CSV
+  4. Ctrl + Enter 執行（或按左邊的 ▶）
+  5. 下方 Results 看結果，可以 Download to CSV
 ```
 
-> 📸 **待補截圖**：SQL Lab 畫面，標出 Database / Schema 下拉、Run 按鈕、結果區。
+![SQL Lab](./images/13_superset_sqllab.png)
+
+左側會列出該 schema 底下所有資料表，點一下就會展開欄位；
+上方可以開多個 query 分頁（`Untitled Query 1`、`Query 2`…），彼此獨立。
+`SQL` 選單底下另外有 **Saved Queries**（存起來的查詢）與
+**Query History**（跑過的紀錄）。
 
 **注意事項：**
 
@@ -91,9 +102,15 @@ Dashboard 由 Chart 組成，每張 Chart 背後一定有一個 Dataset。
 **方式 A：直接用一張實體表**
 
 ```
-Datasets → + Dataset
-  Database / Schema / Table 三個下拉選一選 → Create Dataset and Create Chart
+上方選單 Datasets → 右上 + Dataset
+  Database / Schema / Table 三個下拉選一選
+  → 右下 Create and explore dataset
 ```
+
+![New dataset 畫面](./images/16_superset_new_dataset.png)
+
+> Table 下拉裡 `⊞` 圖示是實體表、`fx` 是 view；
+> 有 ⚠️ 的表示 Superset 抓不到部分欄位資訊，通常還是能用。
 
 **方式 B：用一段 SQL（Virtual Dataset）**
 
@@ -123,17 +140,22 @@ Charts → + Chart → 選 Dataset → 選圖表類型 → Create new chart
 | 明細清單 | Table |
 | 佔比 | Pie Chart（**類別超過 6 個就不要用**） |
 
-左側面板填：
+中間的 **Data** 分頁填這幾格：
 
-- **Metrics**：要算什麼（`COUNT(*)`、`SUM(金額)`…）
-- **Dimensions / Group by**：要按什麼切（日期、分行、風險等級…）
-- **Filters**：篩選條件
-- **Time range**：時間區間
+| 欄位 | 填什麼 |
+|---|---|
+| **X-axis** | 橫軸要放什麼（通常是日期欄位） |
+| **Time Grain** | 日／週／月 |
+| **Metrics** | 要算什麼（`COUNT(*)`、`SUM(Txn_Count)`…） |
+| **Dimensions** | 要按什麼再切一層（分行、風險等級…） |
+| **Filters** | 篩選條件 |
 
-按 **Create chart** 預覽，滿意後右上 **Save**。
+![Chart 編輯畫面](./images/14_superset_chart_editor.png)
 
-> 📸 **待補截圖**：Chart 編輯畫面，標出 Metrics / Dimensions / Filters / Time range
-> 四個欄位的位置與 Save 按鈕。
+改完按左下角的 **Update chart** 看預覽，滿意後按右上角 **Save**。
+
+> 左邊 **Chart Source** 那一欄列出這個 Dataset 有哪些 Metrics 與 Columns，
+> 直接拖到中間的格子裡也可以。
 
 ---
 
@@ -147,6 +169,12 @@ Dashboards → + Dashboard
   → 右上 Save
 ```
 
+![Dashboard 編輯模式](./images/15_superset_dashboard_edit.png)
+
+右側 **Charts** 分頁列出所有圖表（勾 `Show only my charts` 只看自己的），
+拖到左邊畫布上即可；**Layout elements** 分頁有分隔線、標題、Tab 等版面元件。
+編輯中隨時可以 **Discard**（放棄）或 **Save**。
+
 **加篩選器**（讓看的人可以自己換日期、換分行）：
 
 ```
@@ -156,8 +184,6 @@ Dashboards → + Dashboard
   → 指定 Dataset 與欄位
   → 選擇要套用到哪些 Chart
 ```
-
-> 📸 **待補截圖**：Dashboard 編輯模式，標出 Charts 拖曳區與 Add/Edit Filters 位置。
 
 **發布給別人看**：
 

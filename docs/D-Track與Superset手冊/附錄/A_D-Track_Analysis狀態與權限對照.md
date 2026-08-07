@@ -76,18 +76,30 @@ bcp-scripts : fix/bump-crypto    ← 不保證會自動套用到這裡
 
 ## 3. Team 權限對照
 
-**Administration → Access Management → Teams**
+**UI 路徑**：`Administration → Access Management → Teams`
 
-### CI 用的 team（`gitlab-ci`）
-
-只要這四個：
+### CI 用的 team（`System SBOM Uploaders`）
 
 | 權限 | 用途 |
 |---|---|
 | `BOM_UPLOAD` | 上傳 SBOM |
 | `VIEW_PORTFOLIO` | 查專案 UUID |
-| `VIEW_VULNERABILITY` | 讀弱點數量 |
+| `VIEW_VULNERABILITY` | 讀弱點數量與 findings 清單 |
 | `PROJECT_CREATION_UPLOAD` | `autoCreate=true` 自動建專案 |
+| **`VULNERABILITY_ANALYSIS`** | **自動放行 OS 層套件**（`ci/dtrack_suppress_os.sh`） |
+
+> ⚠️ **`VULNERABILITY_ANALYSIS` 給 CI 是一個刻意的取捨。**
+>
+> 它是「能讓紅燈變綠燈」的權限，一般不該給自動化。我們給它，是因為：
+>
+> 1. **範圍寫死在程式碼裡**：`ci/dtrack_suppress_os.sh` 只處理
+>    `pkg:deb/`、`pkg:rpm/`、`pkg:apk/` 三種 purl，
+>    `pkg:pypi/` 這些「我們自己選的套件」一律不碰
+> 2. **改那份程式碼要走 MR**，而 `ci/` 底下的檔案由 Maintainer 把關
+> 3. **每一筆自動放行都在 Details 留下完整說明**（規則出處、時間、pipeline 連結）
+>
+> 不接受這個授權的話，設 `DTRACK_OS_SUPPRESS=0` 關掉自動放行，
+> 這個權限就可以拿掉——代價是每次掃描被幾百個 OS 弱點淹沒。
 
 **不要**給：
 
@@ -95,23 +107,30 @@ bcp-scripts : fix/bump-crypto    ← 不保證會自動套用到這裡
 |---|---|
 | `PORTFOLIO_MANAGEMENT` | CI 不需要能刪專案 |
 | `ACCESS_MANAGEMENT` | CI 不需要能改權限 |
-| `VULNERABILITY_ANALYSIS` | ★ **CI 不該能自己標記例外** ★ |
+| `SYSTEM_CONFIGURATION` | CI 不需要能改系統設定 |
 
-> `VULNERABILITY_ANALYSIS` 特別要注意：給了它，等於讓 pipeline
-> 有能力把自己掃出來的弱點標成 Not Affected 讓自己過關。
+### 人用的 team ← 由 Keycloak 群組對應，不要手動加人
 
-### 人用的 team
+**權限統一在 Keycloak 管**：
 
-建議至少分兩種：
+```
+Administration → Access Management → OpenID Connect Groups
+  → 把 Keycloak 群組對應到 D-Track team
+```
 
-| Team | 權限 | 給誰 |
-|---|---|---|
-| `dai-viewer` | `VIEW_PORTFOLIO`、`VIEW_VULNERABILITY` | 一般開發人員、稽核 |
-| `dai-security` | 上面兩個 + `VULNERABILITY_ANALYSIS` | 能決定標記例外的人（**人數要少**） |
+| Keycloak 群組 | D-Track Team | 權限 | 給誰 |
+|---|---|---|---|
+| `dai-viewer` | 唯讀 team | `VIEW_PORTFOLIO`、`VIEW_VULNERABILITY` | 一般開發人員、稽核 |
+| `dai-security` | 資安 team | 上面兩個 + `VULNERABILITY_ANALYSIS` | 能決定標記例外的人（**人數要少**） |
+| `dai-admin` | `Administrators` | 全部 | 系統管理員 |
 
 > **「能把紅燈變綠燈」的權限要跟「能看」分開。**
-> 標記例外是一個有安全影響的決定，應該只有少數幾個人做得到，
+> 人工標記例外是一個有安全影響的決定，應該只有少數幾個人做得到，
 > 而且每一次都要有紀錄。
+
+> ⚠️ **不要用 `Managed Users` 手動建帳號。**
+> 那會變成一個不受 LDAP 管理的帳號，離職時不會被停用。
+> `Managed Users` 底下應該只留救援用的 `admin`。
 
 ---
 

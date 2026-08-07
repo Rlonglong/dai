@@ -22,7 +22,7 @@ docker compose restart superset
 docker compose logs -f superset      # 看有沒有 Python 語法錯誤
 ```
 
-> ⚠️ 這兩個檔案的權限要是 `644`（見部署手冊 Phase 0-11）。
+> ⚠️ 這兩個檔案的權限要是 `644`（見部署手冊 Phase 0-12）。
 > 改完如果容器起不來，先確認權限沒被改掉。
 
 ---
@@ -67,37 +67,43 @@ docker compose logs -f superset      # 看有沒有 Python 語法錯誤
 
 ## 3. 角色怎麼對應
 
-### 現在的邏輯
+### 我們採用的做法：Keycloak 群組 → Superset 角色
 
-`custom_sso_security_manager.py` 覆寫了 `oauth_user_info()`（取使用者資訊）
-與角色指派邏輯。三種常見寫法：
-
-**寫法 A：所有人都給 Gamma，資料權限另外用自訂角色管**
+**權限統一在 Keycloak 管**，Superset 這邊只負責「翻譯」：
 
 ```python
-AUTH_USER_REGISTRATION = True
-AUTH_USER_REGISTRATION_ROLE = "Gamma"
-```
+# superset_config.py
+AUTH_USER_REGISTRATION = True          # 第一次 SSO 登入時自動建立本機使用者紀錄
+AUTH_USER_REGISTRATION_ROLE = "Gamma"  # 沒對應到任何群組時的最低權限（看不到任何資料）
 
-最單純，**新使用者預設看不到任何資料**，要管理員另外授權。
-安全性最高，管理成本是每個人都要手動加角色。
-
-**寫法 B：依 Keycloak 的 role 對應 Superset 角色**
-
-```python
 AUTH_ROLES_MAPPING = {
-    "superset_admin":  ["Admin"],
-    "superset_dev":    ["Alpha", "sql_lab"],
-    "superset_viewer": ["Gamma"],
+    # Keycloak 群組名稱          : Superset 角色
+    "dai-superset-admin":  ["Admin"],
+    "dai-superset-dev":    ["Alpha", "sql_lab"],
+    "dai-superset-user":   ["Gamma", "sql_lab"],
+    "dai-superset-viewer": ["Gamma"],
+    # 各單位的資料角色（在 Superset 上用 List Roles 建好，這裡對應過去）
+    "dai-superset-稽核室":  ["稽核室"],
 }
-AUTH_ROLES_SYNC_AT_LOGIN = True     # 每次登入都重新同步
+AUTH_ROLES_SYNC_AT_LOGIN = True        # 每次登入都以 Keycloak 為準重算角色
 ```
 
-**建議用這種**：權限集中在 Keycloak 管，
-人員異動時改 Keycloak 群組即可，不用登入 Superset 改。
+要讓這個對應成立，Keycloak 那邊必須把群組資訊放進 token：
 
-**寫法 C：依 LDAP 群組對應**
-同 B，只是來源欄位換成 LDAP 群組（要先在 Keycloak 做 group mapper）。
+```
+Keycloak Admin Console → realm postoffice
+  → Client scopes → 建一個 groups mapper（Mapper Type: Group Membership）
+  → Token Claim Name: groups，勾 Add to ID token / Add to access token
+  → Clients → superset → Client scopes → 把該 scope 加進去
+```
+
+`custom_sso_security_manager.py` 負責從 token 裡把 `groups` 這個 claim 讀出來
+交給 Flask-AppBuilder 比對 `AUTH_ROLES_MAPPING`。
+
+> 📌 **不要在 Superset 上手動指派角色**，`AUTH_ROLES_SYNC_AT_LOGIN=True`
+> 會在下次登入時把手動加的角色洗掉，而且不會有任何提示。
+> 群組規劃見
+> [日常維運 · 02 · 第 4 節](../日常維運/02_Superset_資料庫連線與權限.md#4-使用者與權限統一在-keycloak-管)。
 
 ### `AUTH_ROLES_SYNC_AT_LOGIN` 的取捨
 
@@ -106,7 +112,9 @@ AUTH_ROLES_SYNC_AT_LOGIN = True     # 每次登入都重新同步
 | `True` | 每次登入都以 Keycloak 為準重算角色 | **在 Superset 手動加的角色會被洗掉** |
 | `False` | 只在第一次註冊時指派 | Keycloak 那邊移除權限，Superset 這邊不會跟著收回 |
 
-> 用 `True` 的話，**自訂資料角色也要放進 `AUTH_ROLES_MAPPING`**，
+**我們選 `True`**：權限的唯一真相在 Keycloak，Superset 只是反映它。
+
+> ⚠️ 用 `True` 的話，**自訂資料角色也一定要放進 `AUTH_ROLES_MAPPING`**，
 > 否則管理員在 Superset 上手動加的角色下次登入就不見了，
 > 而且不會有任何提示——只會收到使用者說「我昨天還看得到」。
 
@@ -179,7 +187,7 @@ FEATURE_FLAGS = {
 | 登入成功但沒有任何選單 | 沒拿到角色，或角色沒有權限 | `Settings → List Users` 看該使用者實際的 Roles |
 | 昨天看得到、今天看不到 | `AUTH_ROLES_SYNC_AT_LOGIN=True` 把手動加的角色洗掉了 | 把該角色加進 `AUTH_ROLES_MAPPING` |
 | 容器起不來 | 設定檔語法錯誤或權限不對 | `docker compose logs superset`；確認檔案是 644 |
-| TLS 憑證驗證失敗 | 容器不信任自簽 CA | 確認 Phase 0-8 的 CA 有匯入，必要時重建映像 |
+| TLS 憑證驗證失敗 | 容器不信任自簽 CA | 確認 Phase 0-9 的 CA 有匯入，必要時重建映像 |
 
 更多症狀見 [12_疑難排解](./12_疑難排解.md)。
 
