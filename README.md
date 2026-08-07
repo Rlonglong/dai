@@ -114,9 +114,13 @@ deploy_package_vm5.tar.gz
 
 ### `cicd_template/` 在哪裡、怎麼用
 
-CI/CD 的素材（`ci/` 腳本、`.gitlab-ci.yml`、`.gitleaks.toml`、`.flake8`、
-`pyproject.toml`、`deploy_exclude.txt`）**不是部署到某台機器上執行的東西**，
+CI/CD 的素材（`ci/` 腳本、`.gitlab-ci.yml`、**`.gitignore`**、`.gitleaks.toml`、
+`.flake8`、`.sqlfluff`、`pyproject.toml`、`deploy_exclude.txt`）
+**不是部署到某台機器上執行的東西**，
 而是「建 GitLab repo 時要複製進 repo 根目錄」的樣板。
+
+**這一整組是一套，少一個都不行。** `install.sh` 會全部複製過去，
+所以只要用它就不會漏；**手動 `cp` 最容易漏掉的就是開頭是點的那幾個**。
 
 它放在**用得到它的那兩個包裡**：
 
@@ -140,6 +144,18 @@ cd <部署根目錄>/cicd_template
 > `deploy_exclude.txt` 少了的話，**下次部署會洗掉正式機的 `.env`**。
 > 所以做法是「集中維護一份 → 用 `install.sh` 複製到各 repo 根目錄」。
 > 完整說明見 [`cicd_template/README.md`](./deploy_package_vm3/cicd_template/README.md)。
+
+> ⚠️ **`.gitignore` 與 `deploy_exclude.txt` 是兩件不同的事，兩份都要在。**
+>
+> | | `.gitignore` | `deploy_exclude.txt` |
+> |---|---|---|
+> | 管什麼 | 什麼**進版控** | rsync **不傳、也不刪** 什麼 |
+> | 誰在讀 | git | `ci/deploy_rsync.sh` 的 `--exclude-from` |
+> | 少了會怎樣 | `.env`、`profiles.yml`、`__pycache__`、`dbt_project/target/`、`dagster_home/storage/` 這些會被 commit 進 repo——**帳密進版控就得清歷史，不是刪掉就好** | rsync 的 `--delete` 會把正式機上那些檔案**當成「repo 沒有的多餘檔案」刪掉** |
+>
+> 兩份清單**內容要對得起來**：新增一種執行期產物時兩份都要加。
+> 只加 `.gitignore` → 它不進版控，但正式機上那份會被 `--delete` 洗掉；
+> 只加 `deploy_exclude.txt` → 正式機安全，但垃圾會被 commit 進 repo。
 
 ---
 
@@ -1360,9 +1376,16 @@ GitLab UI → New project → Blank project（**不要**勾 Initialize with READ
 | `dagster-workspace` | **VM4** 包裡的 `workspace/dagster_workspace/` | **VM3** 包裡的 `cicd_template/`，profile 用 `dagster-workspace` |
 | `bcp-scripts` | **VM1** 上的 `/home/bcp_runner/scripts/` | **VM1** 包裡的 `cicd_template/`，profile 用 `bcp-scripts` |
 
-「CI/CD 素材」指的是 `ci/` 腳本與 `.gitlab-ci.yml`、`.gitleaks.toml`、`.flake8`、
-`pyproject.toml`、`deploy_exclude.txt` 這幾個**必須放在 repo 根目錄**的檔案。
-一律用 `install.sh` 複製，不要手動 `cp`。
+「CI/CD 素材」指的是 `ci/` 腳本與 `.gitlab-ci.yml`、**`.gitignore`**、
+`.gitleaks.toml`、`.flake8`、`.sqlfluff`、`pyproject.toml`、`deploy_exclude.txt`
+這幾個**必須放在 repo 根目錄**的檔案。一律用 `install.sh` 複製，不要手動 `cp`。
+
+> ★ **`.gitignore` 一定要跟著複製進去。**
+> 它跟 `deploy_exclude.txt` 是一組的：前者擋「什麼進版控」，
+> 後者擋「rsync 不傳、也不刪什麼」。少了 `.gitignore`，
+> `.env` 與 `profiles.yml` 會被 commit 進 repo；
+> 少了 `deploy_exclude.txt`，正式機上那兩個檔案會被 `--delete` 洗掉。
+> `install.sh` 兩份都會複製，用它就不會漏。
 
 **① `dagster-workspace`**（在 **VM3** 上做，或把兩邊的東西抓到自己電腦上做）：
 

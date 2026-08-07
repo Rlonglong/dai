@@ -13,14 +13,36 @@
 `.gitlab-ci.yml`、`.gitleaks.toml`、`.flake8`、`pyproject.toml` 這些檔案
 **工具是固定去 repo 根目錄找的**，搬到子目錄就失效：
 
-| 檔案 | 誰在讀 | 放錯地方的後果 |
+| 檔案 | 誰在讀 | 放錯地方／漏掉的後果 |
 |---|---|---|
 | `.gitlab-ci.yml` | GitLab | pipeline 完全不會跑 |
+| **`.gitignore`** | git | **`.env`、`profiles.yml` 會被 commit 進 repo**；執行期產物（`__pycache__`、`dbt_project/target/`、`dagster_home/storage/`）也會一起進版控 |
 | `.gitleaks.toml` | gitleaks（本機 hook / 伺服器 hook / CI 三邊共用） | 每個呼叫點都要補 `-c` |
 | `.flake8` | flake8 | 只認 repo 根的 `.flake8` / `setup.cfg` / `tox.ini` |
 | `.sqlfluff` | sqlfluff | 由檔案往上找到 repo 根 |
 | `pyproject.toml` | black | 同上 |
 | `deploy_exclude.txt` | `ci/deploy_rsync.sh` | rsync 少了刪除保護清單，**下次部署會洗掉正式機的 `.env`** |
+
+### `.gitignore` 與 `deploy_exclude.txt` 的分工
+
+兩份都要在，管的是不同的事：
+
+| | `.gitignore` | `deploy_exclude.txt` |
+|---|---|---|
+| 管什麼 | 什麼**進版控** | rsync **不傳、也不刪**什麼 |
+| 誰在讀 | git | `ci/deploy_rsync.sh` 的 `--exclude-from` |
+| 保護的方向 | 不讓機密／垃圾**進 repo** | 不讓正式機上的檔案**被 `--delete` 洗掉** |
+
+`rsync` 跑的是 `-a --delete --checksum --exclude-from=deploy_exclude.txt`。
+`--delete` 的語意是「repo 沒有的，正式機上也不該有」——
+所以正式機上人工建立的 `.env`、`profiles.yml` 之所以活得下來，
+靠的是它們列在 `deploy_exclude.txt` 裡（`--delete` **不會**刪被 `--exclude` 排除的檔案，
+那是 `--delete-excluded` 的行為，我們刻意不用）。
+
+**兩份清單的內容要對得起來**，新增一種執行期產物時兩份都要加：
+
+- 只加 `.gitignore` → 不進版控了，但正式機上那份會被 `--delete` 洗掉
+- 只加 `deploy_exclude.txt` → 正式機安全，但垃圾會被 commit 進 repo
 
 所以做法是：**在這裡集中維護 → 用指令複製到各 repo 的根目錄**。
 改規則時改這裡一份，再同步出去，兩個 repo 不會各自漂移。

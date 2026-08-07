@@ -36,9 +36,12 @@ deploy_package_vm1/
 │                                       → /etc/rsyslog.d/10-dai-integrity-server.conf
 │
 └── cicd_template/                  ← 建 `bcp-scripts` GitLab repo 時複製過去的素材
+    ├── README.md                       ★怎麼用寫在這★
     ├── install.sh                      ★用這支複製，不要手動 cp★
-    ├── common/                         ci/ 腳本、.gitleaks.toml、.flake8、pyproject.toml
+    ├── common/                         ci/ 腳本、.gitleaks.toml、.flake8、.sqlfluff、pyproject.toml
     └── bcp-scripts/                    .gitlab-ci.yml、.gitignore、deploy_exclude.txt、requirements.txt
+                                        （★.gitignore 與 deploy_exclude.txt 兩份都要
+                                          複製進 repo，缺一個都會出事，見該 README★）
 ```
 
 ---
