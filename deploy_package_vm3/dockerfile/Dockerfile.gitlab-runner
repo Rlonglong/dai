@@ -1,0 +1,3 @@
+FROM dai/gitlab-runner:v3.1
+
+RUN mkdir -p /home/gitlab-runner && chmod 755 /home/gitlab-runner

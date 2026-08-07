@@ -1,0 +1,13 @@
+ARG TRIVY_VERSION=v1.0
+FROM dai/trivy:${TRIVY_VERSION}
+
+# 建立目標資料夾（確保路徑存在）
+RUN mkdir -p /home/trivy/.cache/trivy/db /home/trivy/.cache/trivy/java-db
+
+# 直接將宿主機解壓後的資料夾內容 COPY 進去
+# 加上 --chown=trivy:trivy 可以避免離線環境下 Trivy 執行時出現 Permission denied 權限問題
+COPY --chown=trivy:trivy ../security/vulner_db/db/ /home/trivy/.cache/trivy/db/
+COPY --chown=trivy:trivy ../security/vulner_db/java-db/ /home/trivy/.cache/trivy/java-db/
+
+# 設定環境變數指向快取路徑
+ENV TRIVY_CACHE_DIR=/home/trivy/.cache/trivy

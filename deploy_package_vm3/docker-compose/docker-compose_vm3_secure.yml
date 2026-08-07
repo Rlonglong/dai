@@ -1,0 +1,363 @@
+services:
+  # ----------------------------------------
+  # 1. 邊界逆向代理閘道器 (Nginx) — VM3 自己的 HTTPS 入口
+  # ----------------------------------------
+  nginx:
+    image: dai/nginx:v1.0
+    container_name: nginx-vm3
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      # Container Registry：與 GitLab 共用 gitlab.dai.post.gov.tw 同一個
+      # domain，僅用不同 port 區分（GitLab 官方不支援路徑式掛載在同一個
+      # domain+port 下，同 domain 不同 port 是官方支援的設定方式之一）。
+      - "5050:5050"
+    volumes:
+      - ${NGINX_VM3_CONFIG_DIR}:/etc/nginx/conf.d:ro,z
+      - ${TLS_CERT_LOCAL_PATH}:/etc/nginx/ssl:ro,z
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/healthz | grep -q ok || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    logging:
+      driver: "syslog"
+      options:
+        tag: "dai/nginx-vm3"
+    networks:
+      vm3-network:
+        aliases:
+          - gitlab.dai.post.gov.tw
+          - dtrack.dai.post.gov.tw
+  # ----------------------------------------
+  # 2. 原始碼版控與 CI/CD 中心 (GitLab)
+  #    Security-hardened version
+  #    Base: docker-compose_vm3.yml
+  #    CVE reference: sast/report/gitlab_v0_vulner_report.md
+  #                    （一、Ubuntu OS / 二、Node.js / 三、Ruby Gems /
+  #                     四、Go 二進位 CRITICAL+HIGH 已處理；四、其餘
+  #                     Severity 與五、六章節尚未處理）
+  #                    secure_report/gitlab_secure_report.md
+  #
+  #    範圍說明：本檔目前僅納入 gitlab 服務（含 2026-06-30 起內含啟用的
+  #    Container Registry，因為 omnibus 架構下 registry 是同一個 gitlab
+  #    容器內的 runit 服務，不是獨立 docker-compose service，沿用本檔既有
+  #    的 seccomp-gitlab.json，不另開新檔）。nginx-vm3 / gitlab-runner-ci /
+  #    dtrack-server / dtrack-frontend 等同一份 docker-compose_vm3.yml 下
+  #    的其他服務尚未開始處理，沿用 docker-compose_vm3.yml 原設定，待您
+  #    指示處理順序後再逐步併入本檔。
+  #
+  #    2026-06-30：依您指示移除 AppArmor（RHEL 9 不支援 AppArmor，且不
+  #    自訂 SELinux type/policy module），改以 seccomp + Dockerfile 層
+  #    （移除 busybox/wget 二進位，見 Dockerfile.gitlab Section 4）取代，
+  #    RHEL 9 上由 container runtime 預設套用的 SELinux container_t
+  #    domain 為原生防線，不需要 docker-compose 額外設定。詳見
+  #    secure_report/gitlab_secure_report.md「AppArmor 移除與 SELinux
+  #    原生防線」章節（含一項已知防護縮減：tar 還原時的寫入範圍限制）。
+  # ----------------------------------------
+  gitlab:
+    image: dai/gitlab:v1.3
+    container_name: gitlab
+    restart: always
+    hostname: '${VM3_IP}'
+    env_file:
+      - ../env/vm3.env
+    environment:
+      GITLAB_ROOT_PASSWORD: ${GITLAB_ROOT_PASSWORD}
+      GITLAB_OMNIBUS_CONFIG: |
+        # 1. 核心與 Rails 日誌壓制
+        gitlab_rails['env'] = { "GITLAB_LOG_LEVEL" => "warn" }
+        gitlab_rails['version_check_enabled'] = false
+        gitlab_rails['usage_ping_enabled'] = false
+        gitlab_rails['snowplow_enabled'] = false
+
+        # 2. 獨立元件 Log Level 壓制
+        gitaly['logging_level'] = 'warn'
+        gitaly['env'] = { "GRPC_LOG_LEVEL" => "WARN" }
+        gitlab_shell['log_level'] = 'WARN'
+        nginx['error_log_level'] = 'warn'
+        registry['log_level'] = 'warn'
+
+        # 3. 壓制 Exporter 內部監控與心跳雜訊
+        gitlab_exporter['log_level'] = 'warn'
+        redis_exporter['log_level'] = 'warn'
+        postgres_exporter['log_level'] = 'warn'
+        prometheus['log_level'] = 'warn'
+
+        external_url 'https://gitlab.dai.post.gov.tw'
+        nginx['listen_https'] = false
+        nginx['listen_port'] = 80
+
+        gitlab_rails['gitlab_shell_ssh_port'] = 2224
+        letsencrypt['enable'] = false
+
+        gitlab_rails['omniauth_enabled'] = true
+        gitlab_rails['omniauth_allow_single_sign_on'] = ['openid_connect']
+        gitlab_rails['omniauth_block_auto_created_users'] = false
+        gitlab_rails['omniauth_providers'] = [
+          {
+            name: "openid_connect",
+            label: "Keycloak (郵局統一登入)",
+            args: {
+              name: "openid_connect",
+              scope: ["openid", "profile", "email"],
+              response_type: "code",
+              issuer: "https://auth.dai.post.gov.tw/realms/postoffice",
+              discovery: true,
+              client_auth_method: "basic",
+              uid_field: "preferred_username",
+              client_options: {
+                identifier: "gitlab",
+                secret: "${GITLAB_OIDC_CLIENT_SECRET}",
+                redirect_uri: "https://gitlab.dai.post.gov.tw/users/auth/openid_connect/callback",
+                end_session_endpoint: "https://auth.dai.post.gov.tw/realms/postoffice/protocol/openid-connect/logout"
+              }
+            }
+          }
+        ]
+
+        # 4. Container Registry（2026-06-30 確認：現在啟用）
+        # [CVE-2026-33186 grpc CRITICAL] 刻意不設定 registry['debug_addr']，
+        # 明確寫 nil 釘住預設值，避免日後設定變更時意外開啟 registry 內建的
+        # gRPC health-check endpoint（已查證該 endpoint 正是此 CVE 的觸發面）。
+        registry['enable'] = true
+        registry['debug_addr'] = nil
+        # 與 GitLab 共用 gitlab.dai.post.gov.tw 同一個 domain，不開新
+        # 子網域；用不同 port（5050）區分（GitLab 官方支援的設定方式之一，
+        # 不支援用路徑掛在同一個 domain+port 下）。
+        registry_external_url 'https://gitlab.dai.post.gov.tw:5050'
+        # 修正（2026-06-30 測試發現）：registry_external_url 使用 https://
+        # 會讓 omnibus 自動為 registry vhost 設定內部 TLS 終止，預期憑證
+        # 路徑與實際掛載的憑證檔名不符（導致 nginx [emerg] cannot load
+        # certificate）。TLS 終止實際由 nginx-vm3 的 registry.conf 負責
+        # （與主要 gitlab vhost 同一套做法），此處比照
+        # nginx['listen_https'] = false 停用容器內建 TLS。
+        # 內部監聽 5050（與 nginx-vm3 對外的 5050 對齊，同 domain 用 port
+        # 區分，不能沿用 80，否則會跟主要 gitlab vhost 衝突）。
+        registry_nginx['listen_https'] = false
+        registry_nginx['listen_port'] = 5050
+        # 未設定 registry['storage']，沿用預設本機檔案系統儲存於
+        # /var/opt/gitlab/registry（已含在既有 volume
+        # ${GITLAB_HOME}/data:/var/opt/gitlab 範圍內，未配置 S3/物件儲存）。
+        # [CVE-2026-33815/33816 pgx CRITICAL] registry['database']['enabled']
+        # 預設為 "prefer"，會連線同容器內 GitLab 自帶的 PostgreSQL
+        # （dbname: registry，僅限容器內部連線，未對外暴露），維持預設行為。
+
+    # [架構限制 — 已實際以 `docker run --entrypoint /bin/bash dai/gitlab:v1.3`
+    #  進入 image 查證，本節不採用 non-root user / read_only / cap_drop:ALL]
+    # omnibus 的 PID1（/assets/init-container，bash 腳本）以 root 啟動
+    # runit（runsvdir），並於容器每次啟動時動態產生 /opt/gitlab/sv/* 下各服務
+    # 的 runit 目錄與 socket（已查證 image 內 /opt/gitlab/sv 僅預先包含
+    # sshd，其餘 postgresql/redis/nginx/registry/prometheus/consul 皆為
+    # 啟動時動態產生），再透過 chpst 將每個子服務 setuid/setgid 切換至專屬
+    # 系統帳號（git/gitlab-www/gitlab-redis/gitlab-psql/registry/...）。
+    # 這是 omnibus 架構本身的設計，非可關閉的選項：
+    #   - user: 非 root      → chpst setuid 會失敗，所有子服務無法啟動
+    #   - cap_drop: ALL     → 移除 CAP_SETUID/CAP_SETGID/CAP_CHOWN，同樣
+    #                         導致子服務切換帳號失敗
+    #   - read_only: true   → /opt/gitlab/sv、/run、/tmp 在每次啟動時都
+    #                         需要被 chef reconfigure 重新產生，並非唯讀
+    # 因此本節在不變更執行身分／capability 全集／檔案系統可寫性的前提下，
+    # 以 seccomp + 局部 capability 收斂 + DNS resolver 限制進行防堵，詳見
+    # secure_report/gitlab_secure_report.md。
+    #
+    # [2026-06-30 移除 AppArmor] 原本由 apparmor-gitlab 負責的「deny
+    # busybox/wget 執行」已改在 Dockerfile.gitlab Section 4 於 build 階段
+    # 直接移除二進位達成；mount/kernel-module/kexec 等 syscall 層防線
+    # 本就以下方 seccomp profile 為主、AppArmor 僅是重複的次要防線，
+    # 移除後無防護縮減。唯一的防護縮減是 tar 還原備份時的寫入範圍限制
+    # （原本由 AppArmor 子 profile 限制在 /var/opt/gitlab/backups，無法
+    # 用 docker-compose/Dockerfile/seccomp 取代，已記錄於
+    # secure_report 並以「備份來源驗證」程序性管控做為主要防線）。
+    # RHEL 9 上不需要在此額外指定 SELinux label：container runtime（
+    # Docker/Podman）預設即會以 container_t（搭配自動產生的 MCS category）
+    # 限制容器存取 host 資源，不需要、也不應該自訂 type/policy module。
+    security_opt:
+      - no-new-privileges:true
+      - seccomp:../security/seccomp-gitlab.json
+
+    # 深度防禦，不影響 omnibus 內部 setuid/setgid 切換：
+    # Docker 預設授予的 14 個 capability 中，明確移除 3 個已查證 GitLab
+    # 容器內任何流程都不需要的：
+    #   NET_RAW  — 未發現任何元件建立 raw socket（無 ping/traceroute 類功能）
+    #   MKNOD    — 不需要在容器內建立裝置節點
+    #   SETPCAP  — chpst 的 setuid/setgid 切換僅需 CAP_SETUID/CAP_SETGID，
+    #              不需要操作其他行程的 capability bounding set
+    # 保留 CHOWN/DAC_OVERRIDE/FOWNER/FSETID/KILL/SETGID/SETUID/
+    # NET_BIND_SERVICE/SYS_CHROOT/AUDIT_WRITE/SETFCAP，避免破壞 sshd 與
+    # omnibus 內部帳號切換（未經實際完整啟動驗證，建議上線前以本檔再跑一次
+    # 完整功能測試確認 sshd / registry / CI runner 連線皆正常）。
+    cap_drop:
+      - NET_RAW
+      - MKNOD
+      - SETPCAP
+
+    ports:
+      # 只暴露 SSH port，HTTP 80 由同 VM 的 Nginx 代理（不需要 host port 映射）
+      - '2224:22'
+    volumes:
+      - ${GITLAB_HOME}/config:/etc/gitlab:z
+      - ${GITLAB_HOME}/logs:/var/log/gitlab:z
+      - ${GITLAB_HOME}/data:/var/opt/gitlab:z
+    shm_size: '256mb'
+
+    # [CVE-2026-4437 / CVE-2026-4438 / CVE-2026-5435 / CVE-2026-6238]
+    # glibc resolver 處理惡意 DNS 回應（TSIG OOB write、CNAME chain、
+    # gethostbyaddr）系列弱點：強制使用受信任的內部 DNS resolver，避免容器
+    # 對任意上游 DNS server 發出查詢並接收未經驗證的回應。
+    # auth.dai.post.gov.tw 已由下方 extra_hosts 靜態指定，不經過此
+    # resolver；本設定主要防護 webhook / repository mirroring 等管理員可自行
+    # 設定目的地的功能所產生的 DNS 查詢。
+    # 已依您確認的環境內部 DNS resolver 設定（兩台互為主備）。
+    dns:
+      - 10.10.43.1
+      - 10.10.43.2
+    dns_opt:
+      - "ndots:1"
+      - "timeout:3"
+      - "attempts:2"
+
+    # [CVE-2026-27171 zlib1g CRC32 combine DoS]
+    # 已依您確認的 VM3 host 規格（8 core / 16GB RAM）設定。保留約 2 core /
+    # 4GB headroom 給同 VM 上其他服務（nginx-vm3、未來的 dtrack-server /
+    # dtrack-frontend、gitlab-runner-ci），並以 GitLab 官方建議的最低規格
+    # （4 vCPU / 8GB RAM）做為 reservations 下限保證。
+    # 注意：此數值未經實際啟動容器驗證，建議套用後先在測試環境完整跑一輪
+    # （Web UI、CI pipeline、Container Registry）觀察是否觸發 OOM 或 CPU
+    # throttling，確認無誤後才上線正式環境。
+    deploy:
+      resources:
+        limits:
+          cpus: "6.0"
+          memory: 12G
+        reservations:
+          cpus: "2.0"
+          memory: 8G
+
+    logging:
+      driver: "syslog"
+      options:
+        tag: "dai/gitlab"
+    extra_hosts:
+      - "auth.dai.post.gov.tw:${VM5_IP}"
+    networks:
+      - vm3-network
+
+  # ----------------------------------------
+  # 3. GitLab Runner (CI — 負責 CI 流程)
+  # ----------------------------------------
+  gitlab-runner-ci:
+    image: dai/gitlab-runner:v3.1
+    container_name: gitlab-runner-ci
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ../workspace/gitlab-runner-ci:/etc/gitlab-runner:z
+      - ${TLS_CERT_LOCAL_PATH}:/etc/gitlab-runner/certs:z
+    logging:
+      driver: "syslog"
+      options:
+        tag: "dai/gitlab-runner-ci"
+    networks:
+      - vm3-network
+  
+  # ----------------------------------------
+  # 4. OWASP Dependency-Track Server
+  # ----------------------------------------
+  dtrack-server:
+    image: dai/dt_apiserver:v2.1
+    container_name: dtrack-server
+    restart: unless-stopped
+    logging:
+      driver: "syslog"
+      options:
+        tag: "dai/dtrack-server"
+    env_file:
+      - ../env/vm3.env
+    environment:
+      - ALPINE_DATABASE_MODE=external
+      - ALPINE_DATABASE_URL=jdbc:postgresql://${VM4_IP}:${INFRA_DB_PORT}/${DTRACK_DB_NAME}
+      - ALPINE_DATABASE_DRIVER=org.postgresql.Driver
+      - ALPINE_DATABASE_USERNAME=${DTRACK_DB_USER}
+      - ALPINE_DATABASE_PASSWORD=${DTRACK_DB_PASSWORD}
+
+      - ALPINE_OIDC_ENABLED=true
+      - ALPINE_OIDC_CLIENT_ID=${DTRACK_CLIENT_ID}
+      - ALPINE_OIDC_ISSUER=https://auth.dai.post.gov.tw/realms/postoffice
+      - ALPINE_OIDC_USERNAME_CLAIM=preferred_username
+      - ALPINE_OIDC_TEAMS_CLAIM=groups
+      - ALPINE_OIDC_USER_PROVISIONING=true
+      - ALPINE_OIDC_TEAM_SYNCHRONIZATION=true
+      - ALPINE_OIDC_CONFIGURATION_URL=https://auth.dai.post.gov.tw/realms/postoffice/.well-known/openid-configuration
+
+      - ALPINE_TELEMETRY_ENABLED=false
+      - VULNDB_V1_UPDATE=false
+      - OSSINDEX_ENABLED=false
+      - NVD_ENABLED=false
+    volumes:
+      - dtrack-data:/data:z
+    ports:
+      - "${DTRACK_API_PORT}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/api/version || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    extra_hosts:
+      - "auth.dai.post.gov.tw:${VM5_IP}"
+    networks:
+      - vm3-network
+
+  # ----------------------------------------
+  # 5. OWASP Dependency-Track Frontend
+  # ----------------------------------------
+  dtrack-frontend:
+    image: dai/dt_frontend:v1.0
+    container_name: dtrack-frontend
+    restart: unless-stopped
+    logging:
+      driver: "syslog"
+      options:
+        tag: "dai/dtrack-frontend"
+    depends_on:
+      dtrack-server:
+        condition: service_healthy
+    env_file:
+      - ../env/vm3.env
+    environment:
+      - OIDC_ISSUER=https://auth.dai.post.gov.tw/realms/postoffice
+      - OIDC_CLIENT_ID=${DTRACK_CLIENT_ID}
+      - API_BASE_URL=https://dtrack.dai.post.gov.tw
+    ports:
+      - "${DTRACK_FRONT_PORT}:8080"
+    extra_hosts:
+      - "auth.dai.post.gov.tw:${VM5_IP}"
+    networks:
+      - vm3-network
+
+  # ----------------------------------------
+  # 6. trivy SAST
+  # ----------------------------------------
+  trivy:
+    image: dai/trivy:20260703
+    container_name: trivy
+    restart: unless-stopped
+    command:
+      - server
+      - --listen
+      - 0.0.0.0:4954
+      - --token
+      - "${TRIVY_SERVER_TOKEN}"
+      - --skip-db-update
+    networks:
+      - vm3-network
+
+volumes:
+  dtrack-data:
+
+networks:
+  vm3-network:
+    driver: bridge

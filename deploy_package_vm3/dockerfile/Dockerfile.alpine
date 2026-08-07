@@ -1,0 +1,5 @@
+FROM dai/alpine:v1.2
+
+COPY GRCA3.crt /usr/local/share/ca-certificates/
+
+RUN update-ca-certificates

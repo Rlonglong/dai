@@ -1,0 +1,64 @@
+{
+  "comment": "Seccomp profile for gitlab container (dai/gitlab:v1.3, omnibus GitLab EE on Ubuntu 24.04). Allows all Docker-default syscalls and additionally blocks the mount-family syscalls (CVE-2026-27456, affecting bsdutils/libblkid1/libmount1/libsmartcols1/libuuid1/mount/util-linux) plus general kernel-tampering syscalls. Scope: only covers sast/report/gitlab_v0_vulner_report.md section 1 (Ubuntu 24.04 OS base packages). Verified by inspecting the actual image (docker run --entrypoint /bin/bash dai/gitlab:v1.3): the omnibus runtime (PID1 /assets/init-container -> runit) never calls mount(2)/umount(2) itself; the only mount-related feature is the 'mountpoint' check in cookbooks/gitlab/templates/default/mount_point_check.erb, which is only rendered when node['gitlab']['high_availability']['mountpoint'] is configured -- NOT set in docker-compose_vm3_secure.yml's GITLAB_OMNIBUS_CONFIG. ptrace/bpf/perf_event_open are intentionally NOT blocked here (unlike seccomp-bcp-pipeline.json/seccomp-dagster.json) because this is an interactive, ops-debugged production-adjacent service where admins may legitimately attach gdb/strace via `docker exec` for troubleshooting; blocking them is not driven by any CVE in this report section and the risk/benefit tradeoff is different from the single-purpose batch containers.",
+  "defaultAction": "SCMP_ACT_ALLOW",
+  "archMap": [
+    {
+      "architecture": "SCMP_ARCH_X86_64",
+      "subArchitectures": ["SCMP_ARCH_X86", "SCMP_ARCH_X32"]
+    },
+    {
+      "architecture": "SCMP_ARCH_AARCH64",
+      "subArchitectures": ["SCMP_ARCH_ARM"]
+    }
+  ],
+  "syscalls": [
+    {
+      "comment": "CVE-2026-27456 (util-linux/mount family TOCTOU / privilege escalation): block all mount-family syscalls. Verified omnibus GitLab never calls these itself in this deployment's configuration (no high_availability['mountpoint'] set).",
+      "names": [
+        "mount",
+        "umount",
+        "umount2",
+        "pivot_root",
+        "move_mount",
+        "open_tree",
+        "fsopen",
+        "fsmount",
+        "fsconfig",
+        "fspick"
+      ],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "comment": "General attack-surface reduction (not tied to a specific listed CVE in this report section): block kernel module loading. GitLab has no legitimate use for this inside the container.",
+      "names": [
+        "create_module",
+        "init_module",
+        "finit_module",
+        "delete_module"
+      ],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "comment": "General attack-surface reduction: block kernel exec replacement. Not needed by any GitLab component.",
+      "names": [
+        "kexec_load",
+        "kexec_file_load"
+      ],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    },
+    {
+      "comment": "General attack-surface reduction: block swap control and hostname changes from inside the container. Container hostname is fixed at creation time via docker-compose `hostname:`, not changed by any GitLab process at runtime.",
+      "names": [
+        "swapon",
+        "swapoff",
+        "sethostname",
+        "setdomainname"
+      ],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    }
+  ]
+}
