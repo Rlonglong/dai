@@ -1,0 +1,7 @@
+FROM dai/skopeo:v1.0
+
+COPY GRCA3.crt /usr/local/share/ca-certificates/
+
+# 更新系統憑證信任庫
+RUN update-ca-certificates
+ENTRYPOINT ["skopeo"]

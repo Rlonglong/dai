@@ -1,0 +1,5 @@
+FROM dai/cyclonedx:v1.1
+
+COPY GRCA3.crt /usr/local/share/ca-certificates/
+
+RUN update-ca-certificates

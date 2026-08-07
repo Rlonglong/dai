@@ -1,0 +1,10 @@
+FROM dai/dt_apiserver:v2.0
+USER root
+COPY GRCA3.crt /tmp/GRCA3.crt
+RUN keytool -import -trustcacerts -cacerts \
+    -storepass changeit -noprompt \
+    -alias dia-ca \
+    -file /tmp/GRCA3.crt && \
+    rm /tmp/GRCA3.crt
+USER 1000
+
