@@ -28,7 +28,7 @@ WITH T_CUST_BASE AS (
     FROM {{ ref('snp_cust') }}
     WHERE NULLIF(LTRIM(RTRIM(ID)), '') IS NOT NULL
       AND OCUP_CODE = '73'
-      AND TABLE_DATE = '{{ target_ym }}'
+      AND TABLE_DATE = '{{ target_ym }}-01'
 )
 
 , T_CUST_PS_BASE AS (
@@ -63,15 +63,16 @@ WITH T_CUST_BASE AS (
         , DR_FLG
         , CAST(TXN_AMT AS BIGINT) AS TXN_AMT
         , ACCT_NBR_ORI
-        , CONVERT(
-            DATETIME
-            , CONVERT(VARCHAR(10), CPU_DATE, 120) + ' ' + STUFF(STUFF(TXN_TIME, 5, 0, ':'), 3, 0, ':')
-        )
-    FROM {{ ref('txn_ps_net') }}
+        , TRY_CONVERT(
+            DATETIME,
+            CONVERT(VARCHAR(10), CPU_DATE, 120) + ' ' + 
+            STUFF(STUFF(RIGHT('000000' + LTRIM(RTRIM(ISNULL(CAST(TXN_TIME AS VARCHAR), '000000'))), 6), 5, 0, ':'), 3, 0, ':')
+        ) AS DATETIME
+    FROM "DDEQDTAI"."dbo"."T_TXN_PS_NET"
     WHERE NULLIF(LTRIM(RTRIM(ACT_NO)), '') IS NOT NULL
       AND NULLIF(LTRIM(RTRIM(DR_FLG)), '') IS NOT NULL
-      AND FUNC_CODE IN {{ get_config()['FOREIGN_SMALL']['func_codes'] }}
-      AND CPU_DATE = '{{ target_date }}'
+      AND FUNC_CODE IN ('A501','A502','A503','B505','B415')
+      AND CPU_DATE = '2026-08-07'
 )
 
 
@@ -124,6 +125,8 @@ WITH T_CUST_BASE AS (
 
 
 -- ==================== 4. 最終輸出 ====================
-SELECT ACT_NO
+SELECT 
+    ACT_NO
+    , '{{ target_date }}' AS TABLE_DATE
 FROM T_TXN_PS_FINAL
 -- ORDER BY ACT_NO;
