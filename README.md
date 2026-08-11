@@ -169,6 +169,7 @@ cd <部署根目錄>/cicd_template
 ├── .env.example                ← 範本，要 cp 成 .env 再填
 ├── .env                        ← 這台 VM 的環境變數（你自己建的）
 ├── certs/                      ← TLS 憑證
+├── images/                     ← images 離線安裝包(VM1 沒有)
 ├── security/                   ← seccomp profile
 ├── os_packages/                ← 離線安裝用的 rpm
 ├── workspace/                  ← 各服務的設定檔與資料掛載點
@@ -281,7 +282,27 @@ Server: Docker Engine - Community
   ...
 ```
 
-### 0-3. 安裝作業系統套件
+### 0-3 安裝 images
+進入 `images` (`/data/images` or `/run/media/root/D/images`)，`load` 所有 `.tar`
+```bash
+# cd .../images
+for f in *.tar; do docker load -i "$f"; done
+```
+
+確認所有 image 成功載入:
+```bash
+docker images
+```
+應該看到 `.tar` 對應的 image，如
+```bash
+IMAGE                                                                   ID             DISK USAGE   CONTENT SIZE   EXTRA
+dai/alpine:v1.3                                                         df2663d78567       21.7MB         6.69MB
+dai/buildah:v1.1                                                        286dc4d13a99        239MB         72.8MB
+dai/cyclonedx:v1.1                                                      113b62fd79e6        141MB         42.5MB
+...
+```
+
+### 0-4. 安裝作業系統套件
 
 離線環境一樣先把 rpm 帶進來用 `dnf localinstall`；連得到內部 yum repo 的話直接 `dnf install`。
 
@@ -344,7 +365,7 @@ echo 'export PATH="$PATH:/opt/mssql-tools18/bin"' >> /home/bcp_runner/.bashrc
 > `ACCEPT_EULA=Y` 不能省，`msodbcsql18` / `mssql-tools18` 沒有它會安裝失敗。
 > 更詳細的說明見 [`deploy_package_vm1/python_env/README.md`](./deploy_package_vm1/python_env/README.md)。
 
-### 0-4. 時間同步（chrony）★四台 VM 都要做，含 VM1★
+### 0-5. 時間同步（chrony）★四台 VM 都要做，含 VM1★
 
 四台機器的時鐘不一致，會造成三個實際問題：
 
@@ -354,7 +375,7 @@ echo 'export PATH="$PATH:/opt/mssql-tools18/bin"' >> /home/bcp_runner/.bashrc
 | 對帳失敗 | 每日雜湊對帳的時間戳、金融交易對帳的時間區間會錯 |
 | **稽核軌跡失效** | 四台機器的 log 集中到 VM4 之後，時間對不上就**無法重建事件順序**——這是稽核一定會查的項目 |
 
-#### 0-4-1. 設定對時主機
+#### 0-5-1. 設定對時主機
 
 以下都需要 root 權限（直接用 root 或每行加 `sudo`）：
 
@@ -384,7 +405,7 @@ systemctl enable chronyd
 systemctl restart chronyd
 ```
 
-#### 0-4-2. 驗證
+#### 0-5-2. 驗證
 
 ```bash
 chronyc sources -v
@@ -414,7 +435,7 @@ date -u '+%Y-%m-%d %H:%M:%S'
 chronyc tracking
 ```
 
-### 0-5. 傳送部署包並解開
+### 0-6. 傳送部署包並解開
 
 ```bash
 # 在你的操作機上，傳送 deploy package 至各 VM（以 VM3 為例）
@@ -459,7 +480,7 @@ ls -A
 **先讀一次包裡那份 `README.md`**，它寫的是「這個包的每一樣東西要去哪裡」，
 比下面的流程更貼近你手上實際看到的檔案。
 
-### 0-6. 建立 `.env` 並填入實際值（**VM3 / VM4 / VM5**）
+### 0-7. 建立 `.env` 並填入實際值（**VM3 / VM4 / VM5**）
 
 包裡附的是 `.env.example`（範本），**不會被 `docker compose` 讀到**。
 每台 VM 都要先複製成 `.env` 再填：
@@ -501,7 +522,7 @@ grep -E '^VM[0-9]_IP=' .env
 grep -c 'ChangeMe' .env      # 應該是 0，還有 ChangeMe 就是有漏填的
 ```
 
-### 0-7. 確認 compose 檔可以正確解析（**VM3 / VM4 / VM5**）
+### 0-8. 確認 compose 檔可以正確解析（**VM3 / VM4 / VM5**）
 
 改完 `.env`、動過 compose 檔的相對路徑之後，**先驗證再啟動**。
 這一步會把 `.env` 的變數代進去、把所有相對路徑展開成絕對路徑，
